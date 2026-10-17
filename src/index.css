@@ -1,69 +1,279 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --color-bg-base: #ffffff;
+    --color-surface-base: #ffffff;
+    --color-surface-elevated: #f8fafc;
+    --color-line-subtle: #e2e8f0;
+    --color-text-high: #0f172a;
+    --color-text-mid: #334155;
+    --color-text-low: #64748b;
+    --color-ochre-400: #bfa065;
+    --color-ochre-500: #9e7d32;
+    --color-lemon-400: #d4e040;
+  }
+
   body {
-    background-color: #080d0d;
-    color: #e5e9ea;
-    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    background-color: #ffffff;
+    color: #0f172a;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
+    margin: 0;
   }
 }
 
+.font-editorial {
+  font-family: 'Fraunces', Georgia, serif;
+}
+
+.font-mono-code {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .font-bangla {
-  font-family: 'Anek Bangla', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Anek Bangla', system-ui, sans-serif;
 }
 
-.font-cinzel {
-  font-family: 'Cinzel', serif;
+/* =========================================================
+   LIQUID GLASS & GLASSMORPHISM CORE ENGINE (WHITE THEME)
+   ========================================================= */
+
+/* Liquid Glass Standard Surface */
+.liquid-glass {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.92) 0%,
+    rgba(255, 255, 255, 0.78) 100%
+  );
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 
+    0 10px 30px -5px rgba(15, 23, 42, 0.05),
+    0 2px 6px -1px rgba(15, 23, 42, 0.02),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 1px 0 rgba(15, 23, 42, 0.03);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Custom scrollbar */
+.liquid-glass:hover {
+  border-color: rgba(191, 160, 101, 0.5);
+  box-shadow: 
+    0 15px 35px -5px rgba(15, 23, 42, 0.08),
+    0 0 20px rgba(191, 160, 101, 0.12),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 1);
+}
+
+/* Elevated Liquid Glass for Modals & Key Cards */
+.liquid-glass-elevated {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(248, 250, 252, 0.92) 100%
+  );
+  backdrop-filter: blur(36px) saturate(200%);
+  -webkit-backdrop-filter: blur(36px) saturate(200%);
+  border: 1px solid rgba(203, 213, 225, 0.85);
+  box-shadow: 
+    0 25px 60px -12px rgba(15, 23, 42, 0.12),
+    0 8px 24px -4px rgba(15, 23, 42, 0.05),
+    inset 0 1px 2px 0 rgba(255, 255, 255, 1);
+}
+
+/* Liquid Glass Interactive Button */
+.liquid-glass-button {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(241, 245, 249, 0.92) 100%
+  );
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(203, 213, 225, 0.85);
+  color: #0f172a;
+  box-shadow: 
+    0 3px 12px rgba(15, 23, 42, 0.04),
+    inset 0 1px 1px rgba(255, 255, 255, 1);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.liquid-glass-button:hover {
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    rgba(241, 245, 249, 0.98) 100%
+  );
+  border-color: rgba(191, 160, 101, 0.65);
+  color: #0f172a;
+  transform: translateY(-1.5px);
+  box-shadow: 
+    0 8px 24px rgba(15, 23, 42, 0.08),
+    0 0 20px rgba(191, 160, 101, 0.15),
+    inset 0 1px 1.5px rgba(255, 255, 255, 1);
+}
+
+.liquid-glass-button:active {
+  transform: translateY(1px);
+  box-shadow: 
+    0 2px 6px rgba(15, 23, 42, 0.06),
+    inset 0 1px 1px rgba(15, 23, 42, 0.05);
+}
+
+/* Boring Button Style */
+.boring-button {
+  background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  color: #ffffff;
+  border: 1px solid #0f172a;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all 0.2s ease;
+}
+
+.boring-button:hover {
+  background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+  border-color: #bfa065;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18), 0 0 12px rgba(191, 160, 101, 0.2);
+}
+
+/* Liquid Glass Pill / Contact Badge */
+.liquid-glass-pill {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(248, 250, 252, 0.88) 100%
+  );
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  color: #334155;
+  box-shadow: 
+    0 2px 8px rgba(15, 23, 42, 0.04),
+    inset 0 1px 1px rgba(255, 255, 255, 1);
+  transition: all 0.2s ease;
+}
+
+.liquid-glass-pill:hover {
+  background: #ffffff;
+  border-color: rgba(191, 160, 101, 0.6);
+  color: #0f172a;
+  transform: translateY(-1px);
+  box-shadow: 
+    0 6px 16px rgba(15, 23, 42, 0.06),
+    0 0 15px rgba(191, 160, 101, 0.12),
+    inset 0 1px 1.5px rgba(255, 255, 255, 1);
+}
+
+/* Glass Avatar Ring */
+.liquid-glass-avatar {
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 
+    0 4px 14px rgba(15, 23, 42, 0.1),
+    0 0 10px rgba(191, 160, 101, 0.25),
+    inset 0 1px 2px rgba(255, 255, 255, 1);
+}
+
+/* Specular Curved Reflection Highlight */
+.liquid-glass-gloss {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.6) 0%,
+    rgba(255, 255, 255, 0.15) 35%,
+    rgba(255, 255, 255, 0) 65%
+  );
+}
+
+/* TheBoringBlog subtle sky gradient backdrop for white theme */
+.boring-sky-gradient {
+  background: radial-gradient(130% 70% at 50% 0%, 
+    rgba(254, 243, 199, 0.4) 0%, 
+    rgba(248, 250, 252, 0.7) 35%, 
+    #ffffff 85%);
+}
+
+.boring-vignette {
+  background: radial-gradient(circle at 50% 30%, transparent 60%, rgba(241, 245, 249, 0.8) 100%);
+}
+
+/* Subtle line grid reminiscent of architectural blueprints & CAD in TheBoringBlog */
+.boring-grid {
+  background-size: 48px 48px;
+  background-image: 
+    linear-gradient(to right, rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.03) 1px, transparent 1px);
+}
+
+/* Keycap indicator badge */
+.boring-keycap {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(241, 245, 249, 0.95);
+  color: #475569;
+  border: 1px solid rgba(203, 213, 225, 0.85);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 1), 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+/* Ambient Liquid Float Animation */
+@keyframes liquid-float-1 {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(30px, -40px) scale(1.08);
+  }
+  66% {
+    transform: translate(-25px, 25px) scale(0.94);
+  }
+}
+
+@keyframes liquid-float-2 {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  40% {
+    transform: translate(-35px, 35px) scale(1.12);
+  }
+  75% {
+    transform: translate(30px, -20px) scale(0.9);
+  }
+}
+
+.liquid-orb-1 {
+  animation: liquid-float-1 18s ease-in-out infinite;
+}
+
+.liquid-orb-2 {
+  animation: liquid-float-2 22s ease-in-out infinite;
+}
+
+/* Custom minimal scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 23, 0.6);
+  background: #ffffff;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(45, 120, 100, 0.4);
+  background: #cbd5e1;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(56, 178, 145, 0.6);
+  background: #bfa065;
 }
 
-/* Subtle islamic star pattern background */
-.bg-islamic-pattern {
-  background-image: radial-gradient(rgba(34, 197, 94, 0.05) 1px, transparent 1px),
-                    radial-gradient(rgba(217, 175, 55, 0.04) 1px, transparent 1px);
-  background-size: 32px 32px;
-  background-position: 0 0, 16px 16px;
+/* Sound wave animations */
+@keyframes boring-wave {
+  0%, 100% { height: 4px; }
+  50% { height: 26px; }
 }
 
-/* Audio wave animation */
-@keyframes soundwave {
-  0%, 100% {
-    height: 6px;
-  }
-  50% {
-    height: 28px;
-  }
-}
-
-.animate-wave-1 {
-  animation: soundwave 1.2s ease-in-out infinite;
-}
-.animate-wave-2 {
-  animation: soundwave 0.9s ease-in-out 0.2s infinite;
-}
-.animate-wave-3 {
-  animation: soundwave 1.5s ease-in-out 0.4s infinite;
-}
-.animate-wave-4 {
-  animation: soundwave 1.1s ease-in-out 0.1s infinite;
-}
-.animate-wave-5 {
-  animation: soundwave 1.4s ease-in-out 0.3s infinite;
-}
+.wave-bar-1 { animation: boring-wave 1.1s ease-in-out infinite; }
+.wave-bar-2 { animation: boring-wave 0.85s ease-in-out 0.15s infinite; }
+.wave-bar-3 { animation: boring-wave 1.4s ease-in-out 0.3s infinite; }
+.wave-bar-4 { animation: boring-wave 1.05s ease-in-out 0.1s infinite; }
+.wave-bar-5 { animation: boring-wave 1.25s ease-in-out 0.25s infinite; }

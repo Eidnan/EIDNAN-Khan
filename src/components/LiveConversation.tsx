@@ -59,7 +59,6 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
   const currentModelTextRef = useRef<string>('');
 
   const stopAudio = () => {
-    // Stop all playing audio sources
     activeSourcesRef.current.forEach((src) => {
       try {
         src.stop();
@@ -116,7 +115,6 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
     setIsConnecting(true);
 
     try {
-      // 1. Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: 16000,
@@ -128,21 +126,17 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
       });
       mediaStreamRef.current = stream;
 
-      // 2. Initialize Audio Contexts
-      // Input: 16kHz for mic capture according to Gemini Live specification
       const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: 16000,
       });
       inputAudioCtxRef.current = inputCtx;
 
-      // Output: 24kHz for Live API model playback
       const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: 24000,
       });
       outputAudioCtxRef.current = outputCtx;
       nextStartTimeRef.current = outputCtx.currentTime;
 
-      // 3. Connect WebSocket
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${window.location.host}/live-ws`);
       wsRef.current = ws;
@@ -158,17 +152,14 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
           if (data.type === 'ready') {
             setIsConnected(true);
             setIsConnecting(false);
-            console.log('Gemini Live session initialized');
           } else if (data.type === 'audio' && data.audio) {
             playLiveAudioChunk(data.audio);
           } else if (data.type === 'text' && data.text) {
             handleIncomingTranscription(data.text);
           } else if (data.type === 'interrupted') {
-            console.log('Model speech interrupted by user speech');
             stopAudio();
           } else if (data.type === 'turnComplete') {
             currentModelTextRef.current = '';
-            // Reset AI speaking after buffer empties
             setTimeout(() => {
               if (outputAudioCtxRef.current && nextStartTimeRef.current <= outputAudioCtxRef.current.currentTime) {
                 setIsAiSpeaking(false);
@@ -179,13 +170,17 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
             disconnectSession();
           }
         } catch (err) {
-          console.error('Error handling ws message:', err);
+          console.error('Error handling WebSocket message:', err);
         }
       };
 
       ws.onerror = (e) => {
         console.error('WebSocket error:', e);
-        setErrorMessage('ভয়েস সার্ভারের সাথে সংযোগে ত্রুটি দেখা দিয়েছে।');
+        setErrorMessage(
+          lang === 'bn'
+            ? 'লাইভ কানেকশনে ত্রুটি হয়েছে। দয়া করে আবার চেষ্টা করুন।'
+            : 'Live connection encountered an error. Please retry.'
+        );
         disconnectSession();
       };
 
@@ -193,51 +188,49 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
         disconnectSession();
       };
 
-      // 4. Setup microphone audio processing (16kHz PCM chunks -> WS)
-      const source = inputCtx.createMediaStreamSource(stream);
-      const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+      // Set up microphone capture pipeline
+      const micSource = inputCtx.createMediaStreamSource(stream);
+      const bufferSize = 2048;
+      const processor = inputCtx.createScriptProcessor(bufferSize, 1, 1);
       scriptProcessorRef.current = processor;
 
       processor.onaudioprocess = (e) => {
-        if (isMutedRef.current) return;
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        if (isMutedRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          return;
+        }
 
-        const channelData = e.inputBuffer.getChannelData(0);
-        const base64Pcm = float32ToPcm16Base64(channelData);
+        const inputData = e.inputBuffer.getChannelData(0);
+        const pcm16Base64 = float32ToPcm16Base64(inputData);
 
         wsRef.current.send(
           JSON.stringify({
             type: 'audio',
-            audio: base64Pcm,
+            audio: pcm16Base64,
           })
         );
       };
 
-      source.connect(processor);
+      micSource.connect(processor);
       processor.connect(inputCtx.destination);
     } catch (err: any) {
-      console.error('Mic/connection failure:', err);
+      console.error('Failed to initialize microphone or live audio session:', err);
       setErrorMessage(
-        err?.name === 'NotAllowedError'
-          ? 'মাইক্রোফোনের অনুমতি পাওয়া যায়নি। দয়া করে ব্রাউজারের অনুমতি দিন।'
-          : err?.message || 'লাইভ সেশন শুরু করতে ব্যর্থ হয়েছে।'
+        err?.message ||
+          (lang === 'bn'
+            ? 'মাইক্রোফোন অ্যাক্সেস করতে সমস্যা হয়েছে। দয়া করে ব্রাউজারের অনুমতি দিন।'
+            : 'Microphone access denied or audio initialization failed.')
       );
       disconnectSession();
     }
   };
 
-  // Schedule gapless 24kHz PCM playback
-  const playLiveAudioChunk = (base64Audio: string) => {
+  const playLiveAudioChunk = (pcmBase64: string) => {
+    if (!outputAudioCtxRef.current) return;
     const ctx = outputAudioCtxRef.current;
-    if (!ctx) return;
 
-    if (ctx.state === 'suspended') {
-      ctx.resume();
-    }
+    const float32Data = pcm16Base64ToFloat32(pcmBase64);
+    if (float32Data.length === 0) return;
 
-    setIsAiSpeaking(true);
-
-    const float32Data = pcm16Base64ToFloat32(base64Audio);
     const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
     audioBuffer.getChannelData(0).set(float32Data);
 
@@ -245,32 +238,41 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
     source.buffer = audioBuffer;
     source.connect(ctx.destination);
 
-    // Keep track of startTime for gapless playback
     const currentTime = ctx.currentTime;
     if (nextStartTimeRef.current < currentTime) {
-      nextStartTimeRef.current = currentTime + 0.05; // small jitter buffer
+      nextStartTimeRef.current = currentTime;
     }
 
     source.start(nextStartTimeRef.current);
     nextStartTimeRef.current += audioBuffer.duration;
 
+    setIsAiSpeaking(true);
     activeSourcesRef.current.push(source);
+
     source.onended = () => {
-      activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
-      if (activeSourcesRef.current.length === 0) {
+      const idx = activeSourcesRef.current.indexOf(source);
+      if (idx !== -1) {
+        activeSourcesRef.current.splice(idx, 1);
+      }
+      if (activeSourcesRef.current.length === 0 && nextStartTimeRef.current <= ctx.currentTime) {
         setIsAiSpeaking(false);
       }
     };
   };
 
-  const handleIncomingTranscription = (newText: string) => {
-    currentModelTextRef.current += newText;
+  const handleIncomingTranscription = (chunk: string) => {
+    currentModelTextRef.current += chunk;
+    const fullText = currentModelTextRef.current;
+
     setMessages((prev) => {
-      const lastMsg = prev[prev.length - 1];
-      if (lastMsg && lastMsg.sender === 'model') {
+      const last = prev[prev.length - 1];
+      if (last && last.sender === 'model' && last.id !== 'welcome') {
         return [
           ...prev.slice(0, -1),
-          { ...lastMsg, text: lastMsg.text + newText },
+          {
+            ...last,
+            text: fullText,
+          },
         ];
       } else {
         return [
@@ -278,7 +280,7 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
           {
             id: Date.now().toString(),
             sender: 'model',
-            text: newText,
+            text: fullText,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ];
@@ -286,14 +288,14 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
     });
   };
 
-  const handleSendTextMessage = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!textInput.trim()) return;
-
+  const handleSendText = (e: React.FormEvent) => {
+    e.preventDefault();
     const userText = textInput.trim();
-    setTextInput('');
+    if (!userText) return;
 
-    // Add to message log
+    setTextInput('');
+    currentModelTextRef.current = '';
+
     setMessages((prev) => [
       ...prev,
       {
@@ -304,7 +306,6 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
       },
     ]);
 
-    // Send to WebSocket
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
@@ -351,218 +352,184 @@ export const LiveConversation: React.FC<LiveConversationProps> = ({ lang }) => {
   ];
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-16">
-      {/* Live Voice Hero & Microphone Card */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-b from-[#111e1e] via-[#0d1616] to-[#080d0d] border border-amber-600/30 p-6 sm:p-8 shadow-2xl text-center">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 max-w-xl mx-auto space-y-5">
-          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold font-bangla">
-            <Radio className="w-3.5 h-3.5 animate-pulse text-amber-400" />
-            <span>{lang === 'bn' ? 'মডেল: gemini-3.8-live' : 'Model: gemini-3.8-live'}</span>
+    <div className="space-y-6 max-w-4xl mx-auto pb-16 font-bangla">
+      {/* Live Voice Stage with Liquid Glass */}
+      <div className="liquid-glass-elevated rounded-2xl p-6 sm:p-8 text-center relative overflow-hidden border border-slate-200/90 shadow-xl bg-white/90">
+        <div className="max-w-xl mx-auto space-y-4">
+          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs font-mono-code text-[#475569]">
+            <Radio className="w-3.5 h-3.5 text-[#bfa065] animate-pulse" />
+            <span>gemini-3.8-live · 24kHz</span>
           </div>
 
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-white font-bangla">
+          <h2 className="font-editorial text-2xl sm:text-3xl font-bold text-[#0f172a]">
             {lang === 'bn' ? 'রিয়েল-টাইম বাংলা ভয়েস কনভারসেশন' : 'Real-Time Bengali Voice Conversation'}
           </h2>
 
-          <p className="text-sm text-zinc-300/80 font-bangla">
+          <p className="text-xs sm:text-sm text-[#64748b] leading-relaxed">
             {lang === 'bn'
-              ? 'মাইক্রোফোন চালু করে যেকোনো আধ্যাত্মিক জিজ্ঞাসা বা জীবনের কথা সরাসরি বলুন। মডেলটি সরাসরি প্রাকৃতিক বাংলাদেশি বাংলায় গভীর শ্রদ্ধাশীল কণ্ঠে উত্তর দেবে।'
-              : 'Speak directly into your microphone in Bengali or English. Gemini Live responds in real-time with an emotional, clear voice actor delivery.'}
+              ? 'মাইক্রোফোন চালু করে যেকোনো জিজ্ঞাসা সরাসরি বলুন। মডেলটি সরাসরি প্রাকৃতিক বাংলাদেশি বাংলায় গভীর শ্রদ্ধাশীল কণ্ঠে উত্তর দেবে।'
+              : 'Speak directly into your microphone. Gemini Live responds in real-time with authentic Bangladeshi cadence.'}
           </p>
 
-          {/* Glowing Animated Mic Orb */}
-          <div className="py-4 flex flex-col items-center justify-center">
+          {/* Minimalist Tactile Mic Button */}
+          <div className="py-6 flex flex-col items-center justify-center">
             <div className="relative flex items-center justify-center">
-              {/* Outer pulsing rings when active */}
               {isConnected && (
-                <>
-                  <div
-                    className={`absolute w-36 h-36 rounded-full transition-all duration-700 ${
-                      isAiSpeaking
-                        ? 'bg-amber-500/20 scale-125 animate-ping'
-                        : isMicMuted
-                        ? 'bg-zinc-800/20'
-                        : 'bg-emerald-500/20 scale-110 animate-pulse'
-                    }`}
-                  />
-                  <div
-                    className={`absolute w-28 h-28 rounded-full border transition-all ${
-                      isAiSpeaking
-                        ? 'border-amber-400/60 shadow-lg shadow-amber-500/40'
-                        : isMicMuted
-                        ? 'border-zinc-700'
-                        : 'border-emerald-400/60 shadow-lg shadow-emerald-500/40'
-                    }`}
-                  />
-                </>
+                <div
+                  className={`absolute w-32 h-32 rounded-full border transition-all ${
+                    isAiSpeaking
+                      ? 'border-[#bfa065] scale-110 animate-ping opacity-30'
+                      : 'border-slate-300'
+                  }`}
+                />
               )}
 
-              {/* Main Button */}
               <button
                 onClick={isConnected ? disconnectSession : connectSession}
                 disabled={isConnecting}
-                className={`relative z-10 w-24 h-24 rounded-full flex flex-col items-center justify-center transition-all duration-300 shadow-2xl cursor-pointer ${
+                className={`relative z-10 w-20 h-20 rounded-2xl flex flex-col items-center justify-center transition-all shadow-md cursor-pointer border ${
                   isConnected
                     ? isAiSpeaking
-                      ? 'bg-gradient-to-tr from-amber-600 to-yellow-500 text-black hover:scale-105'
+                      ? 'bg-amber-100 text-[#0f172a] border-[#bfa065]'
                       : isMicMuted
-                      ? 'bg-zinc-800 text-zinc-400'
-                      : 'bg-gradient-to-tr from-emerald-600 to-teal-500 text-white hover:scale-105'
-                    : 'bg-gradient-to-tr from-emerald-700 to-amber-700 text-white hover:scale-105 active:scale-95'
+                      ? 'bg-slate-100 text-[#64748b] border-slate-300'
+                      : 'bg-white text-[#0f172a] border-[#bfa065]'
+                    : 'boring-button text-white'
                 }`}
               >
                 {isConnecting ? (
-                  <div className="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                  <div className="w-6 h-6 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                 ) : isConnected ? (
                   isAiSpeaking ? (
                     <>
-                      <Volume2 className="w-8 h-8 animate-bounce" />
-                      <span className="text-[10px] font-bold mt-1 font-bangla">বলছে...</span>
+                      <Volume2 className="w-6 h-6 animate-pulse text-[#bfa065]" />
+                      <span className="text-[10px] font-bold mt-1 font-mono-code text-[#0f172a]">Speaking</span>
                     </>
                   ) : isMicMuted ? (
                     <>
-                      <MicOff className="w-7 h-7" />
-                      <span className="text-[10px] font-bold mt-1 font-bangla">মিউট</span>
+                      <MicOff className="w-6 h-6 text-[#64748b]" />
+                      <span className="text-[10px] font-mono-code mt-1 text-[#64748b]">Muted</span>
                     </>
                   ) : (
                     <>
-                      <Mic className="w-7 h-7 animate-pulse" />
-                      <span className="text-[10px] font-bold mt-1 font-bangla">শুনছে</span>
+                      <Mic className="w-6 h-6 text-[#bfa065]" />
+                      <span className="text-[10px] font-mono-code mt-1 text-[#0f172a] font-bold">Live</span>
                     </>
                   )
                 ) : (
                   <>
-                    <Mic className="w-8 h-8" />
-                    <span className="text-[11px] font-bold mt-1 font-bangla">
-                      {lang === 'bn' ? 'শুরু করুন' : 'Start'}
+                    <Mic className="w-6 h-6 text-[#bfa065]" />
+                    <span className="text-[10px] font-mono-code mt-1">
+                      {lang === 'bn' ? 'শুরু' : 'Start'}
                     </span>
                   </>
                 )}
               </button>
             </div>
 
-            {/* Connection status badge */}
-            <div className="mt-4 flex items-center justify-center space-x-2 text-xs font-bangla">
+            {/* Status indicator */}
+            <div className="mt-4 flex items-center justify-center space-x-2 text-xs font-mono-code text-[#64748b]">
               {isConnected ? (
                 <>
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-emerald-300 font-medium">
-                    {lang === 'bn' ? 'লাইভ সেশন সক্রিয় (Live Active)' : 'Live Session Connected'}
+                  <span className="w-2 h-2 rounded-full bg-[#bfa065] animate-pulse" />
+                  <span>
+                    {isAiSpeaking
+                      ? 'AI Speaking...'
+                      : isMicMuted
+                      ? 'Mic Muted'
+                      : 'Listening (16kHz PCM)...'}
                   </span>
-                  <button
-                    onClick={() => setIsMicMuted(!isMicMuted)}
-                    className="ml-3 px-2.5 py-1 rounded-lg bg-[#182626] hover:bg-[#203333] text-zinc-300 text-xs font-medium flex items-center space-x-1"
-                  >
-                    {isMicMuted ? <MicOff className="w-3.5 h-3.5 text-red-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
-                    <span>{isMicMuted ? (lang === 'bn' ? 'আনমিউট' : 'Unmute') : (lang === 'bn' ? 'মাইক মিউট' : 'Mute Mic')}</span>
-                  </button>
                 </>
               ) : (
-                <span className="text-zinc-400">
-                  {lang === 'bn'
-                    ? 'ক্লিক করে তাৎক্ষণিক ভয়েস আলাপ শুরু করুন'
-                    : 'Click above to start low-latency voice chat'}
-                </span>
+                <span>Click to start interactive conversation</span>
               )}
             </div>
-          </div>
 
-          {/* Quick Prompt Suggestions */}
-          <div className="pt-2">
-            <p className="text-xs text-zinc-400 mb-2 font-bangla">
-              {lang === 'bn' ? 'বা এই বিষয়ে জিজ্ঞেস করুন:' : 'Or tap a question in Bengali:'}
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              {quickPrompts.map((q, idx) => (
+            {/* Mute button if connected */}
+            {isConnected && (
+              <div className="mt-3">
                 <button
-                  key={idx}
-                  onClick={() => handlePromptClick(q)}
-                  className="px-3 py-1.5 rounded-xl bg-[#142323] hover:bg-[#1b2f2f] text-xs text-emerald-200/90 border border-emerald-900/40 transition font-bangla cursor-pointer"
+                  onClick={() => setIsMicMuted(!isMicMuted)}
+                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 text-xs font-mono-code text-[#475569] border border-slate-200/90 transition cursor-pointer shadow-xs"
                 >
-                  "{q}"
+                  {isMicMuted ? '🔊 Unmute Mic' : '🔇 Mute Mic'}
                 </button>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Error alert */}
+      {/* Error Message */}
       {errorMessage && (
-        <div className="p-4 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 text-sm flex items-center space-x-2 font-bangla">
-          <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs font-bangla text-red-700 flex items-center space-x-2">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
           <span>{errorMessage}</span>
         </div>
       )}
 
-      {/* Live Dialogue Transcript Box */}
-      <div className="rounded-2xl bg-[#0d1616]/90 border border-emerald-900/40 p-5 space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-emerald-900/30">
-          <div className="flex items-center space-x-2">
-            <MessageSquare className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-bangla">
-              {lang === 'bn' ? 'কথোপকথনের প্রতিলিপি (Live Transcript)' : 'Live Conversation Transcript'}
-            </h3>
-          </div>
-          <button
-            onClick={() => setMessages([])}
-            className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center space-x-1 font-bangla"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>{lang === 'bn' ? 'মুছে ফেলুন' : 'Clear'}</span>
-          </button>
+      {/* Quick Prompts in Liquid Glass */}
+      <div className="liquid-glass rounded-2xl p-4 sm:p-5 border border-slate-200/90 bg-white/80">
+        <div className="text-xs font-mono-code text-[#64748b] mb-2 uppercase tracking-wider font-semibold">
+          {lang === 'bn' ? 'দ্রুত জিজ্ঞাসার প্রম্পট:' : 'Quick Prompts:'}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {quickPrompts.map((q, idx) => (
+            <button
+              key={idx}
+              onClick={() => handlePromptClick(q)}
+              className="px-3 py-1.5 rounded-lg bg-white text-xs text-[#475569] hover:text-[#0f172a] border border-slate-200/90 hover:border-slate-300 transition text-left cursor-pointer shadow-xs"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Conversation Thread in Liquid Glass */}
+      <div className="liquid-glass rounded-2xl p-5 sm:p-6 space-y-4 max-h-[380px] overflow-y-auto border border-slate-200/90 bg-white/80">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 text-xs font-mono-code text-[#64748b]">
+          <span>Conversation History</span>
+          <span>{messages.length} messages</span>
         </div>
 
-        {/* Message bubble stream */}
-        <div className="space-y-3 max-h-[360px] overflow-y-auto pr-2">
+        <div className="space-y-3">
           {messages.map((m) => (
             <div
               key={m.id}
-              className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
+              className={`p-3.5 rounded-xl border text-xs sm:text-sm leading-relaxed ${
+                m.sender === 'user'
+                  ? 'bg-amber-50/80 border-[#bfa065]/40 text-[#0f172a] ml-6'
+                  : 'bg-white border-slate-200/90 text-[#334155] mr-6 shadow-xs'
+              }`}
             >
-              <div
-                className={`max-w-[85%] sm:max-w-[75%] p-3.5 rounded-2xl text-sm leading-relaxed font-bangla ${
-                  m.sender === 'user'
-                    ? 'bg-emerald-700 text-white rounded-br-xs'
-                    : 'bg-[#122020] border border-emerald-800/40 text-emerald-100 rounded-bl-xs'
-                }`}
-              >
-                <div className="flex items-center space-x-1.5 mb-1 text-[11px] opacity-70">
-                  <span>{m.sender === 'user' ? (lang === 'bn' ? 'আপনি' : 'You') : (lang === 'bn' ? 'ভয়েস অ্যাক্টর' : 'Voice Actor')}</span>
-                  <span>•</span>
-                  <span>{m.time}</span>
-                </div>
-                <p>{m.text}</p>
+              <div className="flex items-center justify-between font-mono-code text-[10px] text-[#64748b] mb-1">
+                <span className="font-semibold">{m.sender === 'user' ? 'You' : 'EIDNAN Voice Actor'}</span>
+                <span>{m.time}</span>
               </div>
+              <p className="whitespace-pre-wrap">{m.text}</p>
             </div>
           ))}
         </div>
-
-        {/* Text Input Fallback */}
-        <form onSubmit={handleSendTextMessage} className="pt-2 flex items-center space-x-2">
-          <input
-            type="text"
-            value={textInput}
-            onChange={(e) => setTextInput(e.target.value)}
-            placeholder={
-              lang === 'bn'
-                ? 'বাংলায় কোনো প্রশ্ন বা বার্তা টাইপ করুন...'
-                : 'Type message in Bengali or English...'
-            }
-            className="flex-1 px-4 py-2.5 rounded-xl bg-[#091010] border border-emerald-900/50 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 font-bangla"
-          />
-          <button
-            type="submit"
-            disabled={!textInput.trim() || !isConnected}
-            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-semibold text-xs transition flex items-center space-x-1.5 font-bangla cursor-pointer"
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span>{lang === 'bn' ? 'পাঠান' : 'Send'}</span>
-          </button>
-        </form>
       </div>
+
+      {/* Text Message Fallback Input */}
+      <form onSubmit={handleSendText} className="flex gap-2">
+        <input
+          type="text"
+          value={textInput}
+          onChange={(e) => setTextInput(e.target.value)}
+          placeholder={lang === 'bn' ? 'বার্তা লিখুন এবং এন্টার চাপুন...' : 'Type message in Bengali/English...'}
+          className="flex-1 bg-white border border-slate-200/90 focus:border-[#bfa065] rounded-xl px-4 py-2.5 text-xs sm:text-sm text-[#0f172a] placeholder-[#94a3b8] outline-none transition shadow-inner"
+        />
+        <button
+          type="submit"
+          className="boring-button px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center space-x-1.5 text-white cursor-pointer"
+        >
+          <Send className="w-3.5 h-3.5 text-[#bfa065]" />
+          <span>{lang === 'bn' ? 'পাঠান' : 'Send'}</span>
+        </button>
+      </form>
     </div>
   );
 };

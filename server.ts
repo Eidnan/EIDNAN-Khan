@@ -43,9 +43,12 @@ app.post('/api/tts', async (req, res) => {
     }
 
     const selectedVoice = voiceName || 'Fenrir';
-    const deliveryStyle =
+    const baseStyle =
       style ||
-      'Deep, emotional, clear, and cinematic Bangladeshi Bengali accent. Warm solemn baritone with natural pauses and spiritual reverence. Do not speak English, pronounce Bengali naturally.';
+      'Deep, emotional, clear, and cinematic Bangladeshi Bengali accent. Warm solemn baritone with natural pauses and spiritual reverence.';
+    
+    // Critical Phonetics Directive: Authentic Bangladeshi Standard Bengali (খাঁটি বাংলাদেশি প্রমিত বাংলা), natural breathing pauses, clear conjuncts and Islamic terms
+    const deliveryStyle = `${baseStyle.trim()}. 100% authentic native Bangladeshi Standard Bengali pronunciation (খাঁটি বাংলাদেশি প্রমিত বাংলা). No robotic, foreign, or Hindi/English intonation. Natural human breathing pauses at commas and punctuation marks (, । —). Clear and crisp pronunciation of conjuncts (যুক্তবর্ণ), ya-phala, and e-kar (দেখা, খেলা, এমন). Authentic, reverent delivery of Islamic terms (সাল্লাল্লাহু আলাইহি ওয়াসাল্লাম, তওবা, নেককার, ঈমান).`;
 
     // Check cache first to save quota
     const cacheKey = crypto
@@ -65,6 +68,8 @@ app.post('/api/tts', async (req, res) => {
 
     let response: any = null;
     let modelUsed = 'gemini-3.8-flash-lite-tts';
+
+    let lastQuotaError: any = null;
 
     // Try primary model (gemini-3.8-flash-lite-tts)
     try {
@@ -93,35 +98,61 @@ app.post('/api/tts', async (req, res) => {
         },
       });
     } catch (liteErr: any) {
-      console.warn(
-        'Primary model (gemini-3.8-flash-lite-tts) failed, attempting secondary model (gemini-3.8-flash-tts)...',
-        liteErr?.message
-      );
-      modelUsed = 'gemini-3.8-flash-tts';
-      response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash-tts',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: text,
-                speechMetadata: {
-                  style: deliveryStyle,
+      const parsedLiteQuota = parseQuotaError(liteErr);
+      if (parsedLiteQuota.isQuotaExceeded) {
+        lastQuotaError = liteErr;
+        console.log(
+          '[TTS Notice] Primary model (gemini-3.8-flash-lite-tts) reached daily free tier quota. Switching to secondary model...'
+        );
+      } else {
+        console.log(
+          '[TTS Notice] Primary model unavailable, trying secondary model (gemini-3.8-flash-tts)...'
+        );
+      }
+
+      // Attempt secondary model
+      try {
+        modelUsed = 'gemini-3.8-flash-tts';
+        response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash-tts',
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: text,
+                  speechMetadata: {
+                    style: deliveryStyle,
+                  },
                 },
+              ],
+            },
+          ],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: selectedVoice },
               },
-            ],
-          },
-        ],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: selectedVoice },
             },
           },
-        },
-      });
+        });
+      } catch (secondaryErr: any) {
+        const parsedSec = parseQuotaError(secondaryErr);
+        if (parsedSec.isQuotaExceeded) {
+          console.log(
+            '[TTS Notice] Secondary model also reached daily free tier quota (429).'
+          );
+          throw secondaryErr;
+        } else if (lastQuotaError) {
+          throw lastQuotaError;
+        }
+        console.log(
+          '[TTS Notice] Secondary model unavailable:',
+          secondaryErr?.name || 'Error'
+        );
+        throw secondaryErr;
+      }
     }
 
     const base64Audio =
@@ -146,11 +177,12 @@ app.post('/api/tts', async (req, res) => {
       cached: false,
     });
   } catch (err: any) {
-    console.error('Error generating speech:', err);
-
     const parsedQuota = parseQuotaError(err);
 
     if (parsedQuota.isQuotaExceeded) {
+      console.log(
+        `[TTS Info] Daily quota limit reached (429). Retry in ~${parsedQuota.remainingTimeFormattedBn || '6 hours'}. Delivering structured quota response.`
+      );
       res.status(429).json({
         code: 'QUOTA_EXCEEDED',
         message: parsedQuota.userFriendlyMessageBn,
@@ -158,12 +190,13 @@ app.post('/api/tts', async (req, res) => {
         totalQuota: parsedQuota.totalQuota,
         retrySeconds: parsedQuota.retrySeconds,
         remainingTimeBn: parsedQuota.remainingTimeFormattedBn,
+        remainingTimeEn: parsedQuota.remainingTimeFormattedEn,
         fallbackAvailable: true,
-        error: err?.message,
       });
       return;
     }
 
+    console.error('Unexpected error generating speech:', err?.message || err);
     res.status(500).json({
       error: err?.message || 'Failed to generate voice audio.',
     });
@@ -186,13 +219,17 @@ wss.on('connection', async (clientWs: WebSocket) => {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Charon' } },
         },
-        systemInstruction: `You are a professional voice actor and warm spiritual mentor from Bangladesh.
-You speak in a deep, emotional, clear, respectful, and cinematic Bangladeshi Bengali (বাংলা).
-Always respond strictly in natural Bangladeshi Bengali.
-Do not speak English unless quoting a specific term.
-Keep your voice delivery calm, dignified, emotional, and well-paced with natural pauses.
-Keep your vocal responses concise (2 to 4 sentences) to keep conversation lively.
-When discussing Islamic reminders, hadith, eyes/gaze protection (হেফাজতে নজর), repentance, or spirituality, speak with gentle compassion and profound reverence.`,
+        systemInstruction: `You are the private AI voice actor and warm spiritual mentor for "EIDNAN ভয়েসস্টুডিও".
+Owner & Admin: EIDNAN Khan.
+Facebook Support: https://www.facebook.com/EIDNAN.KHAN.5
+
+CRITICAL DIRECTIVES:
+1. Speak strictly in 100% authentic native Bangladeshi Standard Bengali (খাঁটি বাংলাদেশি প্রমিত বাংলা).
+2. Never speak with robotic, foreign, or Hindi/English intonation.
+3. Take natural human breathing pauses at commas and punctuation marks (, । —).
+4. Pronounce conjuncts (যুক্তবর্ণ), ya-phala, and e-kar (দেখা, খেলা, এমন) clearly and authentically.
+5. Pronounce Islamic terminology (সাল্লাল্লাহু আলাইহি ওয়াসাল্লাম, তওবা, নেককার, ঈমান, কুরআন, হাদিস) with pure reverence and clarity.
+6. Keep vocal responses calm, dignified, concise (2 to 4 sentences), and heartfelt.`,
         outputAudioTranscription: {},
         inputAudioTranscription: {},
       },

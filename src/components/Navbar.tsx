@@ -1,11 +1,13 @@
 import React from 'react';
-import { Mic, Radio, Sparkles, Volume2, Globe } from 'lucide-react';
+import { Sparkles, Radio, Mic, Globe, ExternalLink, ShieldCheck, Key } from 'lucide-react';
+import { AdminContactLink } from './AdminContactLink';
 
 interface NavbarProps {
   currentTab: 'studio' | 'live';
   setCurrentTab: (tab: 'studio' | 'live') => void;
   lang: 'bn' | 'en';
   setLang: (lang: 'bn' | 'en') => void;
+  onOpenPasscodeModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -13,76 +15,94 @@ export const Navbar: React.FC<NavbarProps> = ({
   setCurrentTab,
   lang,
   setLang,
+  onOpenPasscodeModal,
 }) => {
+  const reqId = typeof window !== 'undefined' ? localStorage.getItem('eidnan_req_id') : null;
+  const isUnlocked = typeof window !== 'undefined' && localStorage.getItem('eidnan_voice_unlocked') === 'true';
+
   return (
-    <header className="sticky top-0 z-50 backdrop-blur-md bg-[#0a1010]/85 border-b border-emerald-900/30">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between">
-        {/* Brand identity */}
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-amber-600 p-0.5 shadow-lg shadow-emerald-900/40">
-            <div className="w-full h-full bg-[#080d0d] rounded-[10px] flex items-center justify-center">
-              <Radio className="w-5 h-5 text-emerald-400 animate-pulse" />
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h1 className="text-lg font-extrabold tracking-tight text-white font-bangla flex items-center space-x-1.5">
-                <span className="text-amber-400 font-black tracking-wider">EIDNAN</span>
-                <span>{lang === 'bn' ? 'ভয়েস স্টুডিও' : 'Voice Studio'}</span>
-              </h1>
-              <span className="px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                Gemini 3.8
+    <header className="sticky top-0 z-40 liquid-glass border-b border-slate-200/80 transition-colors">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+        {/* Brand identity - TheBoringBlog typographic style with Liquid Glass glow */}
+        <div className="flex items-center space-x-3.5">
+          <a href="#" className="group flex items-center space-x-2 text-decoration-none">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#bfa065] group-hover:scale-125 transition-transform shadow-[0_0_12px_rgba(191,160,101,0.8)]" />
+            <div className="flex items-baseline space-x-1.5">
+              <span className="font-editorial text-base sm:text-lg font-bold tracking-tight text-[#0f172a]">
+                EIDNAN
+              </span>
+              <span className="font-editorial text-sm sm:text-base italic text-[#bfa065]">
+                {lang === 'bn' ? 'ভয়েসস্টুডিও' : 'Voice Studio'}
               </span>
             </div>
-            <p className="text-xs text-emerald-200/60 font-bangla">
-              {lang === 'bn'
-                ? 'পেশাদার ভয়েস অ্যাক্টিং ও লাইভ রিয়েল-টাইম কনভারসেশন'
-                : 'Cinematic Voice Narration & Real-time Live Voice AI'}
-            </p>
-          </div>
+          </a>
+
+          {/* Micro status badge */}
+          <span className="hidden md:inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full liquid-glass-pill text-[11px] font-mono-code text-[#64748b]">
+            <span className="text-[#bfa065]">006</span>
+            <span>·</span>
+            <span>PRO 3.8</span>
+          </span>
         </div>
 
-        {/* Navigation tabs & Language switch */}
+        {/* Center / Right controls */}
         <div className="flex items-center space-x-2 sm:space-x-3">
-          <div className="flex items-center bg-[#101b1b] p-1 rounded-xl border border-emerald-800/40 shadow-inner">
+          {/* Navigation Tab Switcher with Liquid Glass Styling */}
+          <div className="flex items-center p-1 rounded-xl liquid-glass border border-slate-200/80">
             <button
               onClick={() => setCurrentTab('studio')}
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
                 currentTab === 'studio'
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-950/50'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                  ? 'liquid-glass-button text-[#0f172a] shadow-sm font-semibold'
+                  : 'text-[#64748b] hover:text-[#0f172a]'
               }`}
             >
-              <Volume2 className="w-4 h-4" />
-              <span className="font-bangla">
-                {lang === 'bn' ? 'ভয়েসঅভার স্টুডিও' : 'Studio Voiceover'}
-              </span>
+              <Radio className={`w-3.5 h-3.5 ${currentTab === 'studio' ? 'text-[#bfa065]' : ''}`} />
+              <span className="font-bangla">{lang === 'bn' ? 'স্টুডিও' : 'Studio'}</span>
             </button>
 
             <button
               onClick={() => setCurrentTab('live')}
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
                 currentTab === 'live'
-                  ? 'bg-gradient-to-r from-amber-600 to-emerald-600 text-white shadow-md shadow-amber-950/50'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                  ? 'liquid-glass-button text-[#0f172a] shadow-sm font-semibold'
+                  : 'text-[#64748b] hover:text-[#0f172a]'
               }`}
             >
-              <Mic className="w-4 h-4 text-amber-300" />
-              <span className="font-bangla flex items-center space-x-1">
-                <span>{lang === 'bn' ? 'লাইভ ভয়েস AI' : 'Live Voice AI'}</span>
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-              </span>
+              <Mic className={`w-3.5 h-3.5 ${currentTab === 'live' ? 'text-[#bfa065]' : ''}`} />
+              <span className="font-bangla">{lang === 'bn' ? 'লাইভ AI' : 'Live AI'}</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-[#bfa065] animate-pulse" />
             </button>
           </div>
+
+          {/* Status info pill */}
+          {isUnlocked ? (
+            <div className="hidden lg:flex items-center space-x-1.5 px-3 py-1.5 rounded-full liquid-glass-pill text-xs font-mono-code text-[#475569]">
+              <span className="text-[#10b981] animate-pulse">●</span>
+              <span>{lang === 'bn' ? 'সক্রিয়' : 'Active'}</span>
+            </div>
+          ) : reqId ? (
+            <button
+              onClick={onOpenPasscodeModal}
+              className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-full liquid-glass-pill text-xs font-mono-code text-[#926b20] hover:border-[#bfa065]/50 transition cursor-pointer"
+              title="Click to enter passcode"
+            >
+              <Key className="w-3 h-3 text-[#bfa065]" />
+              <span>{reqId}</span>
+            </button>
+          ) : null}
+
+          {/* Admin Contact Link with EIDNAN Khan's Picture in Liquid Glass */}
+          <AdminContactLink variant="navbar" lang={lang} />
 
           {/* Language toggle */}
           <button
             onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
-            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-[#111c1c] hover:bg-[#162424] text-xs font-semibold text-emerald-300 border border-emerald-800/40 transition-colors"
+            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl liquid-glass text-xs font-mono-code text-[#475569] hover:text-[#0f172a] border border-slate-200/80 hover:border-slate-300 transition-colors cursor-pointer"
             title="Toggle Language"
           >
-            <Globe className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{lang === 'bn' ? 'EN' : 'বাংলা'}</span>
+            <Globe className="w-3 h-3 text-[#bfa065]" />
+            <span className="text-[11px] font-bold">{lang === 'bn' ? 'EN' : 'বাং'}</span>
           </button>
         </div>
       </div>
