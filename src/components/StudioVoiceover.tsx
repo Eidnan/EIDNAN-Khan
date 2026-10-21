@@ -17,9 +17,9 @@ import {
   RefreshCw,
   ExternalLink,
 } from 'lucide-react';
-import { SCRIPT_PRESETS, VOICE_OPTIONS, ScriptPreset, VoiceOption } from '../data/presets';
-import { createAmbientGenerator } from '../utils/audioUtils';
-import { AudioHistory, saveAudioClipToHistory } from './AudioHistory';
+import { SCRIPT_PRESETS, ScriptPreset, VOICE_OPTIONS } from '../data/presets';
+import { VOCAL_MODES } from '../data/vocalModes';
+import { AudioHistory, saveAudioClipToHistory, getSavedAudioHistory } from './AudioHistory';
 import { parseQuotaError, QuotaErrorInfo, toBengaliDigits } from '../utils/quotaHelper';
 import { AdminAvatar } from './AdminAvatar';
 import { AdminContactLink } from './AdminContactLink';
@@ -28,12 +28,17 @@ interface StudioVoiceoverProps {
   lang: 'bn' | 'en';
 }
 
-export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
+export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({
+  lang,
+}) => {
   const [selectedPresetId, setSelectedPresetId] = useState<string>('gaze_protection_main');
   const [scriptText, setScriptText] = useState<string>(SCRIPT_PRESETS[0].text);
   const [selectedVoice, setSelectedVoice] = useState<string>('Fenrir');
   const [deliveryStyle, setDeliveryStyle] = useState<string>(SCRIPT_PRESETS[0].suggestedStyle);
   const [customStyleActive, setCustomStyleActive] = useState<boolean>(false);
+
+  // Client-side instant audio memory cache to eliminate round-trip latency
+  const clientAudioCache = useRef<Map<string, { url: string; base64: string }>>(new Map());
 
   // Audio state
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -45,23 +50,11 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
 
-  // 20-Download quota state
-  const [downloadQuota, setDownloadQuota] = useState<number>(() => {
-    const saved = localStorage.getItem('eidnan_download_quota');
-    return saved !== null ? parseInt(saved, 10) : 20;
-  });
   const [downloadSuccessToast, setDownloadSuccessToast] = useState<string | null>(null);
-  const [downloadQuotaExhaustedModal, setDownloadQuotaExhaustedModal] = useState<boolean>(false);
 
   // Quota error state
   const [quotaInfo, setQuotaInfo] = useState<QuotaErrorInfo | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
-
-  // Ambient soundscape
-  const [ambientActive, setAmbientActive] = useState<boolean>(false);
-  const [ambientVolume, setAmbientVolume] = useState<number>(0.12);
-  const ambientGenRef = useRef<ReturnType<typeof createAmbientGenerator> | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
 
   // Audio element reference
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -106,53 +99,59 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
     return `${Math.max(1, seconds)} seconds`;
   };
 
-  // Initialize Web Audio Context for ambient sound
-  useEffect(() => {
-    return () => {
-      if (ambientGenRef.current) {
-        ambientGenRef.current.stop();
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => {});
-      }
-    };
-  }, []);
 
-  const handleToggleAmbient = () => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
-    if (!ambientGenRef.current) {
-      ambientGenRef.current = createAmbientGenerator(audioContextRef.current);
-    }
-
-    if (ambientActive) {
-      ambientGenRef.current.stop();
-      setAmbientActive(false);
-    } else {
-      ambientGenRef.current.start();
-      ambientGenRef.current.setVolume(ambientVolume);
-      setAmbientActive(true);
-    }
-  };
-
-  const handleAmbientVolumeChange = (newVol: number) => {
-    setAmbientVolume(newVol);
-    if (ambientGenRef.current) {
-      ambientGenRef.current.setVolume(newVol);
-    }
-  };
 
   const handleSelectPreset = (preset: ScriptPreset) => {
     setSelectedPresetId(preset.id);
     setScriptText(preset.text);
     setSelectedVoice(preset.suggestedVoice);
     setDeliveryStyle(preset.suggestedStyle);
+
+    // Instant check: is audio already available in memory or localStorage history?
+    const cacheKey = `${preset.text.trim()}___${preset.suggestedVoice}___${preset.suggestedStyle.trim()}`;
+    const cached = clientAudioCache.current.get(cacheKey);
+    if (cached) {
+      setAudioUrl(cached.url);
+      return;
+    }
+
+    try {
+      const saved = getSavedAudioHistory().find(
+        (h) => h.text.trim() === preset.text.trim() && h.voiceName === preset.suggestedVoice && h.audioBase64
+      );
+      if (saved && saved.audioBase64) {
+        const binary = atob(saved.audioBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'audio/wav' });
+        const existingUrl = URL.createObjectURL(blob);
+        setAudioUrl(existingUrl);
+        clientAudioCache.current.set(cacheKey, { url: existingUrl, base64: saved.audioBase64 });
+      }
+    } catch (e) {
+      // ignore
+    }
   };
 
-  // Generate TTS Audio via Gemini API backend
+  // Generate TTS Audio via Gemini API backend (with client & server cache for instant playback)
   const handleGenerateVoice = async () => {
     if (!scriptText.trim()) return;
+
+    // Check client-side memory cache for instantaneous 0ms playback
+    const cacheKey = `${scriptText.trim()}___${selectedVoice}___${deliveryStyle.trim()}`;
+    const cached = clientAudioCache.current.get(cacheKey);
+    if (cached) {
+      setAudioUrl(cached.url);
+      setQuotaInfo(null);
+      setTimeout(() => {
+        if (audioRef.current) {
+          audioRef.current.currentTime = 0;
+          audioRef.current.playbackRate = playbackRate;
+          audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+        }
+      }, 30);
+      return;
+    }
 
     setIsGenerating(true);
     setErrorMessage(null);
@@ -205,6 +204,7 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
       const newUrl = URL.createObjectURL(blob);
 
       setAudioUrl(newUrl);
+      clientAudioCache.current.set(cacheKey, { url: newUrl, base64: data.audioBase64 });
 
       // Save clip metadata and audio to persistent history
       try {
@@ -293,17 +293,8 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
     }
   };
 
-  // Enforces exactly 20 downloads quota rule (Generating / Listening remains 100% UNLIMITED)
+  // Direct high-quality WAV audio download
   const handleDownloadAudio = (clipAudioUrl?: string, clipTitle?: string) => {
-    if (downloadQuota <= 0) {
-      setDownloadQuotaExhaustedModal(true);
-      return;
-    }
-
-    const newRemaining = downloadQuota - 1;
-    setDownloadQuota(newRemaining);
-    localStorage.setItem('eidnan_download_quota', String(newRemaining));
-
     const targetUrl = clipAudioUrl || audioUrl;
     if (targetUrl) {
       const a = document.createElement('a');
@@ -368,64 +359,6 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // The 6 expanded Bangladeshi voice moods
-  const moodPresets = [
-    {
-      id: 'cinematic_baritone',
-      idx: '001',
-      titleBn: 'গভীর ও সিনামেটিক',
-      titleEn: 'Cinematic Baritone',
-      descBn: 'গম্ভীর, ভারী ব্যক্তিত্বপূর্ণ ও গভীর আবেগ। তথ্যচিত্র ও গভীর কথার জন্য।',
-      prompt:
-        'Deep, emotional, clear, and cinematic Bangladeshi Bengali accent. Pure Bangladeshi Standard Bengali phonetics. Warm solemn baritone with natural human breathing pauses at punctuation. No foreign accent.',
-    },
-    {
-      id: 'emotional_touching',
-      idx: '002',
-      titleBn: 'আবেগঘন ও হৃদয়স্পর্শী',
-      titleEn: 'Emotional & Moving',
-      descBn: 'ধীরস্থির, নরম ও ভেতর থেকে ছুঁয়ে যাওয়া ব্যাকুল সুর। মোনাজাত ও ব্যথিত অনুভূতির জন্য।',
-      prompt:
-        'Deeply moving, emotional, heartfelt, gentle Bangladeshi Bengali voice acting. Soft solemn tone, tender pauses, intimate spiritual reflection and sincere warmth with natural Bengali cadence.',
-    },
-    {
-      id: 'inspirational_bold',
-      idx: '003',
-      titleBn: 'অনুপ্রেরণাদায়ী ও বলিষ্ঠ',
-      titleEn: 'Inspirational & Bold',
-      descBn: 'উদ্যমী, প্রত্যয়ী, বলিষ্ঠ ও তেজস্বী কণ্ঠ। অনুপ্রেরণামূলক ও জাগরণী কথার জন্য।',
-      prompt:
-        'Inspiring, firm, articulate, powerful baritone Bangladeshi Bengali voiceover. Confident, warm, persuasive, and dignified with crisp Bengali pronunciation and energetic delivery.',
-    },
-    {
-      id: 'mysterious_soft',
-      idx: '004',
-      titleBn: 'রহস্যময় ও শান্ত',
-      titleEn: 'Mysterious Soft',
-      descBn: 'ফিসফিসানি, নিস্তব্ধ রাতের মতো গভীর ও কৌতূহলোদ্দীপক সুর।',
-      prompt:
-        'Mysterious, whispered, contemplative, low-pitched gentle Bangladeshi Bengali. Quiet and deeply atmospheric delivery for solitary nocturnal reflection.',
-    },
-    {
-      id: 'gentle_peaceful',
-      idx: '005',
-      titleBn: 'স্নেহময় ও প্রশান্তিময়',
-      titleEn: 'Peaceful Narrative',
-      descBn: 'শান্ত, দরদি, মমতাভরা ও স্নিগ্ধ উচ্চারণ। শিশু বা ইতিবাচক বার্তার জন্য।',
-      prompt:
-        'Gentle, melodic, serene, tranquil Bangladeshi Bengali voice delivery. Soothing tempo, relaxed human breath pauses, peaceful, tender and reassuring resonance.',
-    },
-    {
-      id: 'epic_storyteller',
-      idx: '006',
-      titleBn: 'ঐতিহাসিক ও আখ্যানমূলক',
-      titleEn: 'Epic Storyteller',
-      descBn: 'প্রাচীন গল্পের রূপরেখায় ক্লাসিক আবহ তৈরি করা সুর।',
-      prompt:
-        'Epic classical narrator voice in pure Bangladeshi Bengali. Varied pitch and pacing suitable for historical storytelling and timeless parables.',
-    },
-  ];
-
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-16">
       {/* Hidden audio element */}
@@ -441,22 +374,22 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
 
       {/* Quota Exhaustion Notice - Formatted strictly to requirement */}
       {quotaInfo && (
-        <div className="liquid-glass-elevated p-6 sm:p-7 rounded-2xl border border-[#bfa065]/40 space-y-4 font-bangla animate-in fade-in relative overflow-hidden">
+        <div className="liquid-glass-elevated p-6 sm:p-7 rounded-2xl border border-amber-300/80 space-y-4 font-bangla animate-in fade-in relative overflow-hidden bg-white/95 shadow-md">
           {/* Subtle liquid amber glow */}
-          <div className="absolute top-0 right-0 w-64 h-64 bg-[#bfa065]/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="absolute top-0 right-0 w-64 h-64 bg-amber-200/20 rounded-full blur-2xl pointer-events-none" />
 
-          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-white/10 relative">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-slate-200/90 relative">
             <div className="flex items-start space-x-3.5">
-              <div className="w-11 h-11 rounded-xl liquid-glass border border-[#bfa065]/50 flex items-center justify-center shrink-0 text-[#bfa065] shadow-[0_0_15px_rgba(191,160,101,0.3)]">
-                <AlertTriangle className="w-5 h-5 animate-pulse" />
+              <div className="w-11 h-11 rounded-xl liquid-glass border border-amber-300 flex items-center justify-center shrink-0 text-[#bfa065] shadow-xs">
+                <AlertTriangle className="w-5 h-5 text-amber-600 animate-pulse" />
               </div>
               <div className="space-y-1.5">
-                <h4 className="text-base sm:text-lg font-bold text-[#faf8f2]">
+                <h4 className="text-base sm:text-lg font-bold text-[#0f172a]">
                   {lang === 'bn'
                     ? '⚠️ দৈনিক ফ্রি ভয়েস কোটা শেষ হয়ে গেছে!'
                     : '⚠️ Daily free voice quota has been exhausted!'}
                 </h4>
-                <p className="text-sm font-medium text-[#d8c198] flex items-center space-x-2">
+                <p className="text-sm font-medium text-amber-800 flex items-center space-x-2">
                   <Clock className="w-4 h-4 text-[#bfa065] shrink-0" />
                   <span>
                     {lang === 'bn'
@@ -472,7 +405,7 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
                         }.`}
                   </span>
                 </p>
-                <div className="text-xs text-[#9d8964] leading-relaxed pt-1">
+                <div className="text-xs text-[#64748b] leading-relaxed pt-1">
                   {lang === 'bn' ? (
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-1">
                       <span>(জরুরি সহায়তার জন্য অ্যাডমিনের সাথে যোগাযোগ করুন:</span>
@@ -480,7 +413,7 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
                         href="https://www.facebook.com/EIDNAN.KHAN.5"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="underline text-[#e8d7b5] hover:text-white transition font-mono break-all font-semibold"
+                        className="underline text-[#0f172a] hover:text-[#bfa065] transition font-mono break-all font-semibold"
                       >
                         https://www.facebook.com/EIDNAN.KHAN.5
                       </a>
@@ -493,7 +426,7 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
                         href="https://www.facebook.com/EIDNAN.KHAN.5"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="underline text-[#e8d7b5] hover:text-white transition font-mono break-all font-semibold"
+                        className="underline text-[#0f172a] hover:text-[#bfa065] transition font-mono break-all font-semibold"
                       >
                         https://www.facebook.com/EIDNAN.KHAN.5
                       </a>
@@ -507,7 +440,7 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
             <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto shrink-0 pt-1">
               <button
                 onClick={handleGenerateVoice}
-                className="liquid-glass-button px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center space-x-1.5 text-[#faf8f2] border border-white/20 cursor-pointer"
+                className="liquid-glass-button px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center space-x-1.5 text-[#0f172a] border border-slate-200 cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-[#bfa065]" />
                 <span>{lang === 'bn' ? 'পুনরায় চেষ্টা' : 'Retry'}</span>
@@ -518,19 +451,19 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
           </div>
 
           {/* Embedded Liquid Glass Admin Card */}
-          <div className="flex items-center justify-between gap-3 p-3 rounded-xl liquid-glass border border-white/15">
+          <div className="flex items-center justify-between gap-3 p-3 rounded-xl liquid-glass border border-slate-200/90 bg-slate-50/70">
             <div className="flex items-center space-x-3">
               <AdminAvatar size="sm" showOnlineDot={true} />
               <div>
-                <p className="font-editorial text-xs font-bold text-[#faf8f2]">EIDNAN Khan (অ্যাডমিন)</p>
-                <p className="text-[11px] font-bangla text-[#9eaebb]">কোটা বৃদ্ধি বা জরুরি সমাধানের জন্য ফেসবুক ইনবক্স করুন</p>
+                <p className="font-editorial text-xs font-bold text-[#0f172a]">EIDNAN Khan (অ্যাডমিন)</p>
+                <p className="text-[11px] font-bangla text-[#64748b]">কোটা বৃদ্ধি বা জরুরি সমাধানের জন্য ফেসবুক ইনবক্স করুন</p>
               </div>
             </div>
             <a
               href="https://www.facebook.com/EIDNAN.KHAN.5"
               target="_blank"
               rel="noopener noreferrer"
-              className="liquid-glass-pill px-3 py-1.5 rounded-lg text-xs font-semibold text-[#bfa065] hover:text-white flex items-center space-x-1.5 border border-[#bfa065]/40"
+              className="liquid-glass-pill px-3 py-1.5 rounded-lg text-xs font-semibold text-[#bfa065] hover:text-[#0f172a] flex items-center space-x-1.5 border border-[#bfa065]/40"
             >
               <span>মেসেজ দিন</span>
               <ExternalLink className="w-3 h-3" />
@@ -567,19 +500,6 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
                   <span>স্ক্রিপ্ট কপি</span>
                 </>
               )}
-            </button>
-
-            <button
-              onClick={handleToggleAmbient}
-              className={`px-3 py-1.5 rounded-lg text-xs font-mono-code border transition flex items-center space-x-1.5 cursor-pointer shadow-xs ${
-                ambientActive
-                  ? 'bg-amber-50 text-[#bfa065] border-amber-300 font-semibold'
-                  : 'bg-white text-[#64748b] border-slate-200/90 hover:text-[#0f172a]'
-              }`}
-              title="Toggle subtle atmospheric tone"
-            >
-              <Music className="w-3.5 h-3.5" />
-              <span>{ambientActive ? 'আবহ: চালু' : 'আবহ: বন্ধ'}</span>
             </button>
           </div>
         </div>
@@ -638,26 +558,27 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
           />
         </div>
 
-        {/* 6 Expanded Voice Moods (001 - 006) - TheBoringBlog Chapter Cards */}
+        {/* Comprehensive Vocal Modes (12 Modes Catalog) - 001 to 012 */}
         <div>
           <div className="flex items-center justify-between text-xs font-mono-code text-[#64748b] mb-2.5 uppercase tracking-wider font-semibold">
-            <span>{lang === 'bn' ? 'আবৃত্তি মুড ও কণ্ঠের প্রকাশভঙ্গি' : 'Select Mood & Tone'}</span>
-            <span className="text-[#bfa065]">001 — 006</span>
+            <span>{lang === 'bn' ? 'আবৃত্তি ও কণ্ঠের ভঙ্গি ক্যাটালগ (১২টি বিশেষায়িত মোড)' : 'Comprehensive Vocal Modes (12 Modes Catalog)'}</span>
+            <span className="text-[#bfa065]">001 — 012</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-            {moodPresets.map((m) => {
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
+            {VOCAL_MODES.map((m) => {
               const isSelected = deliveryStyle === m.prompt && !customStyleActive;
               return (
                 <div
                   key={m.id}
                   onClick={() => {
                     setDeliveryStyle(m.prompt);
+                    setSelectedVoice(m.suggestedVoice);
                     setCustomStyleActive(false);
                   }}
                   className={`p-3 rounded-xl border cursor-pointer transition-all ${
                     isSelected
-                      ? 'bg-amber-50/80 border-[#bfa065] text-[#0f172a] shadow-xs'
+                      ? 'bg-amber-50/90 border-[#bfa065] text-[#0f172a] shadow-xs ring-1 ring-[#bfa065]/50'
                       : 'bg-white border-slate-200/90 text-[#475569] hover:border-slate-300 hover:text-[#0f172a]'
                   }`}
                 >
@@ -666,7 +587,7 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
                       {m.idx}
                     </span>
                     <span className="text-[10px] font-mono-code text-[#64748b]">
-                      {m.titleEn}
+                      {m.suggestedVoice}
                     </span>
                   </div>
                   <h4 className="font-bangla font-semibold text-xs text-[#0f172a] mb-0.5">
@@ -681,29 +602,13 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
           </div>
         </div>
 
-        {/* Voice Persona Selector & Generation Trigger */}
-        <div className="pt-4 border-t border-slate-200/80 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-          {/* Persona selector */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-mono-code text-[#64748b] font-semibold">
-              {lang === 'bn' ? 'কণ্ঠশিল্পী:' : 'Voice:'}
+        {/* Selected Persona Badge & Generation Trigger */}
+        <div className="pt-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+          <div className="flex items-center space-x-2 text-xs font-mono-code text-[#64748b]">
+            <span className="font-semibold text-[#0f172a]">{lang === 'bn' ? 'অ্যাক্টিভ পারসোনা:' : 'Active Persona:'}</span>
+            <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-[#bfa065] border border-amber-200 font-bold">
+              {selectedVoice} (Native Bangladeshi Phonetics)
             </span>
-            {VOICE_OPTIONS.map((v) => (
-              <button
-                key={v.id}
-                onClick={() => setSelectedVoice(v.voiceName)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono-code transition border cursor-pointer ${
-                  selectedVoice === v.voiceName
-                    ? 'bg-amber-50 text-[#0f172a] border-[#bfa065] font-semibold shadow-xs'
-                    : 'bg-white text-[#475569] border-slate-200/90 hover:text-[#0f172a] hover:bg-slate-50'
-                }`}
-              >
-                <span>{v.voiceName}</span>
-                {v.voiceName === 'Fenrir' && (
-                  <span className="ml-1 text-[10px] text-[#bfa065]">★</span>
-                )}
-              </button>
-            ))}
           </div>
 
           {/* Primary Action Button */}
@@ -830,58 +735,6 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({ lang }) => {
               </span>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Download Quota Exhausted Modal with Liquid Glass & Photo */}
-      {downloadQuotaExhaustedModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-in fade-in">
-          <div className="liquid-glass-elevated max-w-md w-full p-6 sm:p-7 rounded-2xl space-y-4 border border-[#bfa065]/50 text-left shadow-2xl relative overflow-hidden bg-white/95">
-            <div className="flex items-center space-x-2 text-[#bfa065]">
-              <AlertTriangle className="w-5 h-5" />
-              <h4 className="font-editorial text-base font-bold text-[#0f172a]">
-                {lang === 'bn' ? 'ডাউনলোড কোটা পূর্ণ হয়েছে' : 'Download Quota Exhausted'}
-              </h4>
-            </div>
-            <p className="font-bangla text-xs text-[#475569] leading-relaxed">
-              {lang === 'bn'
-                ? 'আপনার ফ্রি অডিও ফাইল ডাউনলোড কোটা শেষ হয়েছে। তবে ভয়েস তৈরি করা ও সরাসরি প্রিভিউ শোনা সম্পূর্ণ আনলিমিটেড ও ফ্রি থাকবে।'
-                : 'Your free audio file download quota has been exhausted. However, generating voice and streaming previews remains 100% free and unlimited.'}
-            </p>
-            <div className="p-3.5 rounded-xl liquid-glass border border-slate-200/90 space-y-2">
-              <p className="text-xs font-bangla text-[#926b20] font-medium">
-                অতিরিক্ত ডাউনলোড কোটা পেতে অ্যাডমিনের সাথে ফেসবুকে যোগাযোগ করুন:
-              </p>
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <div className="flex items-center space-x-2.5">
-                  <AdminAvatar size="sm" showOnlineDot={true} />
-                  <div>
-                    <span className="font-editorial text-xs font-bold text-[#0f172a] block">
-                      EIDNAN Khan
-                    </span>
-                    <span className="text-[10px] font-mono-code text-[#64748b]">
-                      System Admin
-                    </span>
-                  </div>
-                </div>
-                <a
-                  href="https://www.facebook.com/EIDNAN.KHAN.5"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="liquid-glass-pill px-3 py-1.5 rounded-lg text-xs font-semibold text-[#bfa065] hover:text-[#0f172a] flex items-center space-x-1.5 border border-[#bfa065]/50"
-                >
-                  <span>ইনবক্স করুন</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              </div>
-            </div>
-            <button
-              onClick={() => setDownloadQuotaExhaustedModal(false)}
-              className="w-full liquid-glass-button py-2.5 rounded-xl text-xs font-semibold text-[#0f172a] cursor-pointer"
-            >
-              ঠিক আছে
-            </button>
-          </div>
         </div>
       )}
 

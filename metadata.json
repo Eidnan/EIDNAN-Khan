@@ -1,6 +1,6 @@
 {
   "name": "Bangla Voice Studio & Live AI",
-  "description": "Professional Bengali voice actor audio narration and real-time live voice conversations powered by Gemini Live and TTS.",
+  "description": "Professional Bengali voice actor audio narration and multilingual voice dubbing studio.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -115,8 +115,8 @@ export const AdminProfileModal: React.FC<AdminProfileModalProps> = ({
 
           <p className="font-bangla text-xs text-[#475569] max-w-xs leading-relaxed mb-5">
             {lang === 'bn'
-              ? 'খাঁটি বাংলাদেশি প্রমিত বাংলা ভয়েস স্টুডিওর প্রতিষ্ঠাতা। জরুরি সাপোর্ট, অনুমোদন ও কোটা বৃদ্ধির জন্য যোগাযোগ করুন।'
-              : 'Founder & System Admin of EIDNAN Voice Studio. Contact for instant approvals & custom voice quotas.'}
+              ? 'খাঁটি বাংলাদেশি প্রমিত বাংলা ভয়েস ও সিড্যান্স ২.৫ ভিডিও স্টুডিওর প্রতিষ্ঠাতা। জরুরি সাপোর্ট, অনুমোদন ও সহযোগিতার জন্য যোগাযোগ করুন।'
+              : 'Founder & System Admin of The Boring Voice Studio. Contact for instant approvals & custom voice quotas.'}
           </p>
 
           {photoSaved && (
