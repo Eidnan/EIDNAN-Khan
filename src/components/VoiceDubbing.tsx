@@ -24,6 +24,9 @@ import {
   ShieldCheck,
   Clock,
   Layers,
+  Edit3,
+  X,
+  FileUp,
 } from 'lucide-react';
 import { AdminAvatar } from './AdminAvatar';
 
@@ -199,21 +202,33 @@ function generateSampleAudioWav(durationSeconds = 6): Blob {
 }
 
 export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
-  // Input mode: mic or file
-  const [inputMode, setInputMode] = useState<'mic' | 'upload'>('mic');
+  // Input mode: 'upload' is primary and default as requested by user
+  const [inputMode, setInputMode] = useState<'upload' | 'mic' | 'sample'>('upload');
+
+  // Audio file upload state
+  const [inputAudioFile, setInputAudioFile] = useState<File | null>(null);
+  const [inputAudioFileSize, setInputAudioFileSize] = useState<string>('');
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Live recording state
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
   const [recordingAudioBlob, setRecordingAudioBlob] = useState<Blob | null>(null);
+
+  // Common audio state
   const [inputAudioUrl, setInputAudioUrl] = useState<string | null>(null);
   const [inputAudioName, setInputAudioName] = useState<string>('');
   const [audioBase64, setAudioBase64] = useState<string>('');
   const [audioMimeType, setAudioMimeType] = useState<string>('audio/wav');
+  const [isInputAudioPlaying, setIsInputAudioPlaying] = useState<boolean>(false);
 
-  // Mic visualizer & media recorder refs
+  // Media recorder refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<any>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const inputAudioPreviewRef = useRef<HTMLAudioElement | null>(null);
 
   // Target Language: 'Bangla' | 'English' | 'Hindi' | 'Arabic'
   const [selectedTargetLang, setSelectedTargetLang] = useState<TargetLanguageKey>('Bangla');
@@ -235,6 +250,11 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
   });
   const [vocalProfile, setVocalProfile] = useState<any>(null);
   const [dubbingNotes, setDubbingNotes] = useState<string>('');
+
+  // Editing extracted text
+  const [isEditingText, setIsEditingText] = useState<boolean>(false);
+  const [editableText, setEditableText] = useState<string>('');
+  const [isReDubbing, setIsReDubbing] = useState<boolean>(false);
 
   // Audio Playback State for Dubbed Result
   const [activeAudioUrl, setActiveAudioUrl] = useState<string | null>(null);
@@ -276,6 +296,102 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     }
   }, [audioPlaybackRate]);
 
+  // Format file size
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  // Process chosen audio file (from drop or input)
+  const processSelectedFile = (file: File) => {
+    if (!file.type.startsWith('audio/') && !file.name.match(/\.(mp3|wav|m4a|webm|ogg|aac|flac)$/i)) {
+      setErrorMessage(
+        lang === 'bn'
+          ? 'অনুগ্রহ করে একটি অডিও ফাইল নির্বাচন করুন (MP3, WAV, M4A, WEBM, OGG, AAC)।'
+          : 'Please select an audio file (MP3, WAV, M4A, WEBM, OGG, AAC).'
+      );
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setErrorMessage(
+        lang === 'bn'
+          ? 'ফাইলের আকার ২০MB-এর বেশি হতে পারবে না।'
+          : 'File size must be under 20MB.'
+      );
+      return;
+    }
+
+    setErrorMessage(null);
+    setInputAudioFile(file);
+    setInputAudioName(file.name);
+    setInputAudioFileSize(formatFileSize(file.size));
+    setAudioMimeType(file.type || 'audio/wav');
+
+    const url = URL.createObjectURL(file);
+    setInputAudioUrl(url);
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const res = reader.result as string;
+      setAudioBase64(res);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Handle audio file input change
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSelectedFile(file);
+    }
+  };
+
+  // Drag and drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processSelectedFile(file);
+    }
+  };
+
+  // Toggle playback of the uploaded input file preview
+  const togglePlayInputPreview = () => {
+    if (!inputAudioPreviewRef.current || !inputAudioUrl) return;
+
+    if (isInputAudioPlaying) {
+      inputAudioPreviewRef.current.pause();
+      setIsInputAudioPlaying(false);
+    } else {
+      // Pause main dubbed player if playing
+      if (audioPlayerRef.current && isPlaying) {
+        audioPlayerRef.current.pause();
+        setIsPlaying(false);
+      }
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      inputAudioPreviewRef.current.play();
+      setIsInputAudioPlaying(true);
+    }
+  };
+
   // Handle live microphone recording
   const startRecording = async () => {
     try {
@@ -305,6 +421,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
         setInputAudioName(
           lang === 'bn' ? 'লাইভ মাইক্রোফোন রেকর্ডিং.webm' : 'Live Microphone Recording.webm'
         );
+        setInputAudioFileSize(formatFileSize(audioBlob.size));
         setAudioMimeType(mimeType);
 
         // Convert blob to base64
@@ -356,40 +473,13 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     }
   };
 
-  // Handle audio file upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('audio/') && !file.name.match(/\.(mp3|wav|m4a|webm|ogg|aac)$/i)) {
-      setErrorMessage(
-        lang === 'bn'
-          ? 'অনুগ্রহ করে একটি অডিও ফাইল নির্বাচন করুন (MP3, WAV, M4A, WEBM, OGG)।'
-          : 'Please select a valid audio file (MP3, WAV, M4A, WEBM, OGG).'
-      );
-      return;
-    }
-
-    setErrorMessage(null);
-    setInputAudioName(file.name);
-    setAudioMimeType(file.type || 'audio/wav');
-    const url = URL.createObjectURL(file);
-    setInputAudioUrl(url);
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const res = reader.result as string;
-      setAudioBase64(res);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Load a pre-made sample for instant testing
+  // Load a pre-made audition sample for instant testing
   const loadAuditionSample = (targetKey: TargetLanguageKey) => {
     const sample = SAMPLE_AUDIOS[targetKey];
     setErrorMessage(null);
     setSelectedTargetLang(targetKey);
     setInputAudioName(`${sample.flag} ${sample.labelBn} (${sample.duration})`);
+    setInputAudioFileSize('~180 KB');
 
     // Generate sample audio wav blob
     const sampleBlob = generateSampleAudioWav(6);
@@ -449,13 +539,13 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     window.speechSynthesis.speak(utterance);
   };
 
-  // Main Action: Analyze Voice, Extract Verbatim Text, & Dub into 4 Languages
+  // Main Action: Analyze Voice File, Extract Verbatim Text, & Dub into 4 Languages
   const handleStartDubbing = async () => {
     if (!audioBase64) {
       setErrorMessage(
         lang === 'bn'
-          ? 'অনুগ্রহ করে প্রথমে মাইক্রোফোনে কথা রেকর্ড করুন অথবা একটি অডিও ফাইল আপলোড করুন।'
-          : 'Please record voice or upload an audio file first.'
+          ? 'অনুগ্রহ করে প্রথমে একটি অডিও ফাইল আপলোড করুন অথবা মাইক্রোফোনে কথা রেকর্ড করুন।'
+          : 'Please upload a voice file or record speech first.'
       );
       return;
     }
@@ -465,18 +555,17 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     setProcessingStep(1);
     setProcessingStatusText(
       lang === 'bn'
-        ? '১/৩: ইনপুট অডিও ও ভাষা স্বয়ংক্রিয়ভাবে শনাক্ত করা হচ্ছে...'
-        : '1/3: Auto-detecting input speech and source language...'
+        ? '১/৩: ভয়েস ফাইল বিশ্লেষণ ও ভাষা স্বয়ংক্রিয়ভাবে শনাক্ত করা হচ্ছে...'
+        : '1/3: Analyzing voice file and auto-detecting language...'
     );
 
     try {
-      // Step interval animation for realistic status feedback
       const stepTimer1 = setTimeout(() => {
         setProcessingStep(2);
         setProcessingStatusText(
           lang === 'bn'
-            ? '২/৩: অডিও থেকে নির্ভুল মূল টেক্সট আলাদা করা হচ্ছে...'
-            : '2/3: Extracting verbatim spoken text from audio...'
+            ? '২/৩: অডিও থেকে নির্ভুল মূল টেক্সট আলাদা ও তৈরি করা হচ্ছে...'
+            : '2/3: Converting voice to verbatim text...'
         );
       }, 1500);
 
@@ -492,7 +581,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                   : selectedTargetLang === 'Arabic'
                   ? 'আরবি'
                   : 'ইংরেজি'
-              } সহ ৪টি ভাষায় কণ্ঠ ডাবিং তৈরি হচ্ছে...`
+              } সহ ৪টি ভাষায় ডাবিং তৈরি হচ্ছে...`
             : `3/3: Synthesizing dubbed voiceover across 4 languages...`
         );
       }, 3200);
@@ -503,6 +592,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
         body: JSON.stringify({
           audioBase64,
           mimeType: audioMimeType,
+          fileName: inputAudioName || (inputAudioFile ? inputAudioFile.name : undefined),
           targetLanguage: selectedTargetLang,
         }),
       });
@@ -513,18 +603,20 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
       const data = await res.json();
 
       if (!res.ok && !data.transcription) {
-        throw new Error(data.error || 'Failed to process audio dubbing.');
+        throw new Error(data.error || 'Failed to process voice file.');
       }
 
       // Populate results
       setDetectedLanguage(data.sourceLanguage || 'Auto Detected Speech');
-      setExtractedTranscription(data.transcription || '');
+      const textResult = data.transcription || '';
+      setExtractedTranscription(textResult);
+      setEditableText(textResult);
       setTranslations(
         data.translations || {
-          bangla: data.translation || data.transcription,
-          english: data.translation || data.transcription,
-          hindi: data.translation || data.transcription,
-          arabic: data.translation || data.transcription,
+          bangla: data.translation || textResult,
+          english: data.translation || textResult,
+          hindi: data.translation || textResult,
+          arabic: data.translation || textResult,
         }
       );
       setVocalProfile(data.vocalProfile || null);
@@ -539,19 +631,18 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
         // Fallback to client audio generation
         const activeText =
           selectedTargetLang === 'Bangla'
-            ? data.translations?.bangla || data.transcription
+            ? data.translations?.bangla || textResult
             : selectedTargetLang === 'English'
-            ? data.translations?.english || data.transcription
+            ? data.translations?.english || textResult
             : selectedTargetLang === 'Hindi'
-            ? data.translations?.hindi || data.transcription
-            : data.translations?.arabic || data.transcription;
+            ? data.translations?.hindi || textResult
+            : data.translations?.arabic || textResult;
 
         const syntheticWavBlob = generateSampleAudioWav(7);
         const url = URL.createObjectURL(syntheticWavBlob);
         setActiveAudioUrl(url);
         setActiveAudioSource('dubbed');
 
-        // Play client speech synthesis speech
         setTimeout(() => {
           speakWithClientTts(activeText, selectedTargetLang);
         }, 500);
@@ -563,9 +654,52 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
       setIsProcessing(false);
       setErrorMessage(
         lang === 'bn'
-          ? 'ভয়েস ডাবিং প্রক্রিয়ায় সমস্যা হয়েছে। ব্রাউজার স্পিচ বিকল্প সক্রিয় করা হয়েছে।'
-          : 'Dubbing error occurred. Activated browser speech synthesis.'
+          ? 'ভয়েস প্রসেসিংয়ে সমস্যা হয়েছে। ব্রাউজার স্পিচ বিকল্প সক্রিয় করা হয়েছে।'
+          : 'Voice processing error occurred. Activated browser speech synthesis.'
       );
+    }
+  };
+
+  // Re-dub with edited text
+  const handleReDubWithEditedText = async () => {
+    if (!editableText.trim()) return;
+
+    setIsReDubbing(true);
+    setErrorMessage(null);
+
+    try {
+      const activeText = editableText.trim();
+      setExtractedTranscription(activeText);
+      setIsEditingText(false);
+
+      // Synthesize for the active target language
+      const resp = await fetch('/api/dub-synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: activeText,
+          targetLanguage: selectedTargetLang,
+          voiceName:
+            selectedTargetLang === 'Arabic'
+              ? 'Charon'
+              : selectedTargetLang === 'Hindi'
+              ? 'Kore'
+              : 'Fenrir',
+        }),
+      });
+
+      const data = await resp.json();
+      if (data.audioBase64) {
+        const url = base64ToBlobUrl(data.audioBase64, 'audio/wav');
+        setActiveAudioUrl(url);
+        setActiveAudioSource('dubbed');
+      } else {
+        speakWithClientTts(activeText, selectedTargetLang);
+      }
+    } catch (e) {
+      speakWithClientTts(editableText, selectedTargetLang);
+    } finally {
+      setIsReDubbing(false);
     }
   };
 
@@ -583,7 +717,6 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
 
     if (!targetText) return;
 
-    // Check if we can synthesize server audio
     try {
       const resp = await fetch('/api/dub-synthesize', {
         method: 'POST',
@@ -602,20 +735,25 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
         return;
       }
     } catch (e) {
-      // ignore
+      // fallback
     }
 
-    // Client TTS fallback
     speakWithClientTts(targetText, targetKey);
   };
 
-  // Audio Playback Controls
+  // Audio Playback Controls for main player
   const togglePlayAudio = () => {
     if (isClientTtsActive) {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
       setIsClientTtsActive(false);
       return;
+    }
+
+    // Stop input audio preview if playing
+    if (inputAudioPreviewRef.current && isInputAudioPlaying) {
+      inputAudioPreviewRef.current.pause();
+      setIsInputAudioPlaying(false);
     }
 
     if (activeAudioSource === 'original' && inputAudioUrl) {
@@ -640,7 +778,6 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
         setIsPlaying(true);
       }
     } else {
-      // If no file url, use speech synthesis for current language
       const currentText =
         selectedTargetLang === 'Bangla'
           ? translations.bangla
@@ -653,7 +790,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     }
   };
 
-  // Toggle A/B Comparison: Original vs Dubbed
+  // Toggle A/B Comparison: Original Voice vs Dubbed Voice
   const handleToggleABSource = (source: 'dubbed' | 'original') => {
     if (isPlaying && audioPlayerRef.current) {
       audioPlayerRef.current.pause();
@@ -681,7 +818,6 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     let urlToDownload = activeAudioUrl;
 
     if (!urlToDownload) {
-      // Generate synthetic WAV on the fly
       const fallbackWav = generateSampleAudioWav(6);
       urlToDownload = URL.createObjectURL(fallbackWav);
     }
@@ -693,7 +829,6 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
     a.click();
     document.body.removeChild(a);
 
-    // Update download quota
     if (downloadQuota > 0) {
       const updated = downloadQuota - 1;
       setDownloadQuota(updated);
@@ -713,7 +848,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
-      {/* Hidden audio element for high-fidelity playback */}
+      {/* Hidden audio element for high-fidelity dubbed playback */}
       <audio
         ref={audioPlayerRef}
         src={activeAudioSource === 'original' ? inputAudioUrl || '' : activeAudioUrl || ''}
@@ -732,26 +867,39 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
         }}
       />
 
+      {/* Hidden audio element for previewing uploaded input file */}
+      <audio
+        ref={inputAudioPreviewRef}
+        src={inputAudioUrl || ''}
+        onEnded={() => setIsInputAudioPlaying(false)}
+        onPause={() => setIsInputAudioPlaying(false)}
+        onPlay={() => setIsInputAudioPlaying(true)}
+      />
+
       {/* Main Studio Console Container */}
       <div className="liquid-glass-elevated rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-xl bg-white/95">
-        {/* Header with Title & Live Engine Badge */}
+        {/* Header with Title & Engine Badge */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-200/80 gap-4">
           <div>
             <div className="flex items-center space-x-2 text-[#bfa065] text-xs font-mono-code uppercase tracking-wider mb-1.5">
               <span className="w-2 h-2 rounded-full bg-[#bfa065] shadow-[0_0_8px_rgba(191,160,101,0.8)]" />
-              <span>{lang === 'bn' ? 'অটো ল্যাঙ্গুয়েজ ডিটেকশন ও ভয়েস ডাবিং' : 'Auto Language Detection & Voice Dubbing'}</span>
+              <span>
+                {lang === 'bn'
+                  ? 'ভয়েস ফাইল আপলোড, অটো টেক্সট কনভার্সন ও ডাবিং'
+                  : 'Voice File Upload, Auto Text Conversion & Dubbing'}
+              </span>
               <span className="text-slate-300">·</span>
               <span className="text-[#64748b]">v3.8 Multi</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold font-editorial text-[#0f172a]">
               {lang === 'bn'
-                ? 'মাল্টিলিঙ্গুয়াল ভয়েস ডাবিং স্টুডিও'
-                : 'Multilingual Voice Dubbing Studio'}
+                ? 'ভয়েস ফাইল ডাবিং ও টেক্সট কনভার্টার'
+                : 'Voice File Dubbing & Text Studio'}
             </h2>
             <p className="font-bangla text-xs sm:text-sm text-[#64748b] mt-1">
               {lang === 'bn'
-                ? 'যেকোনো ভাষার কণ্ঠ ইনপুট দিন — সিস্টেম স্বয়ংক্রিয়ভাবে ভাষা শনাক্ত করবে, মূল টেক্সট আলাদা করবে এবং খাঁটি বাংলা, English, हिन्दी ও العربية ভাষায় ডাবিং করবে।'
-                : 'Input voice in any language — auto-detects language, separates speech text, and dubs natively into Bangla, English, Hindi, and Arabic.'}
+                ? 'আপনার ভয়েস ফাইল আপলোড করুন — সিস্টেম ফাইল থেকে নির্ভুল মূল টেক্সট আলাদা করবে এবং খাঁটি বাংলা, English, हिन्दी ও العربية ভাষায় সরাসরি ডাবিং করবে।'
+                : 'Upload your voice file — system converts speech verbatim to text and dubs into Bangla, English, Hindi, and Arabic.'}
             </p>
           </div>
 
@@ -767,54 +915,190 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
           </div>
         </div>
 
-        {/* SECTION 1: Audio Input (Mic, Upload, or Instant Samples) */}
+        {/* SECTION 1: PROMINENT VOICE INPUT SELECTION */}
         <div className="mt-7 space-y-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <label className="text-xs sm:text-sm font-bangla font-bold text-[#0f172a] flex items-center space-x-2">
               <span className="w-2 h-2 rounded-full bg-[#bfa065]" />
-              <span>ধাপ ১: ইনপুট ভয়েস প্রদান করুন (রেকর্ড বা ফাইল আপলোড):</span>
+              <span>ধাপ ১: ভয়েস ফাইল প্রদান করুন (আপলোড / রেকর্ড):</span>
             </label>
 
-            {/* Input Mode Toggle */}
-            <div className="flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setInputMode('mic')}
-                className={`px-3 py-1 rounded-lg text-xs font-bangla font-semibold transition cursor-pointer ${
-                  inputMode === 'mic'
-                    ? 'bg-white text-[#0f172a] shadow-xs'
-                    : 'text-[#64748b] hover:text-[#0f172a]'
-                }`}
-              >
-                🎙️ লাইভ মাইক্রোফোন
-              </button>
+            {/* Input Mode Selector - Featuring Voice File Upload as primary */}
+            <div className="flex items-center p-1 rounded-2xl bg-slate-100 border border-slate-200/90 shadow-2xs">
               <button
                 type="button"
                 onClick={() => setInputMode('upload')}
-                className={`px-3 py-1 rounded-lg text-xs font-bangla font-semibold transition cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bangla font-bold transition flex items-center space-x-1.5 cursor-pointer ${
                   inputMode === 'upload'
-                    ? 'bg-white text-[#0f172a] shadow-xs'
+                    ? 'bg-white text-[#0f172a] shadow-xs ring-1 ring-slate-200'
                     : 'text-[#64748b] hover:text-[#0f172a]'
                 }`}
               >
-                📁 ফাইল আপলোড
+                <FileUp className="w-3.5 h-3.5 text-[#bfa065]" />
+                <span>📁 ভয়েস ফাইল আপলোড</span>
+                <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded-full font-mono-code">
+                  মূল
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setInputMode('mic')}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bangla font-semibold transition flex items-center space-x-1.5 cursor-pointer ${
+                  inputMode === 'mic'
+                    ? 'bg-white text-[#0f172a] shadow-xs ring-1 ring-slate-200'
+                    : 'text-[#64748b] hover:text-[#0f172a]'
+                }`}
+              >
+                <Mic className="w-3.5 h-3.5 text-[#bfa065]" />
+                <span>🎙️ লাইভ রেকর্ড</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setInputMode('sample')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bangla font-semibold transition flex items-center space-x-1.5 cursor-pointer ${
+                  inputMode === 'sample'
+                    ? 'bg-white text-[#0f172a] shadow-xs ring-1 ring-slate-200'
+                    : 'text-[#64748b] hover:text-[#0f172a]'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-[#bfa065]" />
+                <span>✨ স্যাম্পল ট্রায়াল</span>
               </button>
             </div>
           </div>
 
-          {/* Mode 1: Live Mic Recording */}
+          {/* PRIMARY OPTION: VOICE FILE UPLOAD ZONE */}
+          {inputMode === 'upload' && (
+            <div className="space-y-4">
+              {/* Drag and Drop Container */}
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`p-8 rounded-3xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center cursor-pointer relative ${
+                  isDragging
+                    ? 'border-[#bfa065] bg-amber-500/10 ring-4 ring-[#bfa065]/20 scale-[1.01]'
+                    : inputAudioUrl
+                    ? 'border-emerald-300 bg-emerald-50/20 hover:border-[#bfa065]'
+                    : 'border-slate-300 hover:border-[#bfa065] bg-slate-50/70 hover:bg-amber-50/30'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.aac,.flac"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+
+                <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200/80 text-[#bfa065] flex items-center justify-center mb-3.5 shadow-sm group-hover:scale-110 transition-transform">
+                  <Upload className="w-7 h-7" />
+                </div>
+
+                <div className="max-w-md space-y-1">
+                  <div className="font-editorial text-lg font-bold text-[#0f172a]">
+                    {lang === 'bn'
+                      ? 'আপনার ভয়েস ফাইল এখানে ড্রপ করুন অথবা ব্রাউজ করুন'
+                      : 'Drag & drop your voice file here or browse'}
+                  </div>
+                  <p className="font-bangla text-xs text-[#64748b]">
+                    {lang === 'bn'
+                      ? 'সরাসরি যেকোনো অডিও ফাইল সিলেক্ট করুন — সিস্টেম তা থেকে টেক্সট আলাদা করবে'
+                      : 'Select any voice recording file — system extracts text & dubs'}
+                  </p>
+                </div>
+
+                {/* Audio format badges */}
+                <div className="flex flex-wrap items-center justify-center gap-1.5 mt-4">
+                  {['MP3', 'WAV', 'M4A', 'WEBM', 'OGG', 'AAC'].map((fmt) => (
+                    <span
+                      key={fmt}
+                      className="px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-[11px] font-mono-code font-bold text-[#64748b]"
+                    >
+                      {fmt}
+                    </span>
+                  ))}
+                  <span className="text-[11px] font-mono-code text-[#64748b] ml-1">
+                    (সর্বোচ্চ 20MB)
+                  </span>
+                </div>
+              </div>
+
+              {/* Uploaded File Details Card & Audio Player Preview */}
+              {inputAudioUrl && (
+                <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-50/70 via-white to-amber-50/40 border border-emerald-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in duration-200">
+                  <div className="flex items-center space-x-3.5 min-w-0">
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                      <FileAudio className="w-6 h-6" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-editorial text-sm sm:text-base font-bold text-[#0f172a] truncate">
+                          {inputAudioName}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-mono-code font-bold">
+                          রেডি
+                        </span>
+                      </div>
+                      <div className="text-xs text-[#64748b] font-mono-code flex items-center space-x-2 mt-0.5">
+                        <span>{inputAudioFileSize || 'অডিও ফাইল'}</span>
+                        <span>·</span>
+                        <span>{audioMimeType}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions for uploaded file */}
+                  <div className="flex items-center space-x-2.5 shrink-0 self-end sm:self-center">
+                    {/* Listen preview button */}
+                    <button
+                      type="button"
+                      onClick={togglePlayInputPreview}
+                      className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-bangla font-bold text-[#0f172a] transition flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                    >
+                      {isInputAudioPlaying ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>থামুন</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 text-emerald-600 ml-0.5" />
+                          <span>প্রিভিউ শুনুন</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Change file button */}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bangla font-semibold text-[#64748b] hover:text-[#0f172a] transition cursor-pointer"
+                    >
+                      পরিবর্তন
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SECONDARY OPTION: LIVE MIC RECORDING */}
           {inputMode === 'mic' && (
-            <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center text-center space-y-4">
+            <div className="p-8 rounded-3xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center text-center space-y-4">
               <div className="relative">
                 {isRecording && (
-                  <span className="absolute -inset-2 rounded-full bg-red-400/30 animate-ping pointer-events-none" />
+                  <span className="absolute -inset-3 rounded-full bg-red-400/30 animate-ping pointer-events-none" />
                 )}
                 <button
                   type="button"
                   onClick={isRecording ? stopRecording : startRecording}
                   className={`w-20 h-20 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-lg ${
                     isRecording
-                      ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-200'
+                      ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-200 scale-105'
                       : 'bg-gradient-to-tr from-[#0f172a] to-[#1e293b] hover:to-[#0f172a] text-[#bfa065] shadow-slate-300'
                   }`}
                   title={isRecording ? 'Stop Recording' : 'Start Recording'}
@@ -825,94 +1109,85 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
 
               <div>
                 <div className="font-editorial text-lg font-bold text-[#0f172a]">
-                  {isRecording ? '🎙️ কথা বলুন... রেকর্ডিং চলছে' : 'মাইক্রোফোনে কথা রেকর্ড করুন'}
+                  {isRecording ? '🎙️ রেকর্ডিং চলছে... কথা বলুন' : 'মাইক্রোফোনে সরাসরি কথা রেকর্ড করুন'}
                 </div>
                 <div className="font-mono-code text-xs text-[#64748b] mt-1">
                   {isRecording ? (
                     <span className="text-red-600 font-bold animate-pulse">
-                      REC 00:{recordingSeconds.toString().padStart(2, '0')} / 01:00
+                      🔴 REC 00:{recordingSeconds.toString().padStart(2, '0')} / 01:00
                     </span>
                   ) : (
-                    'যেকোনো ভাষায় ৩ থেকে ৩০ সেকেন্ড কথা বলুন'
+                    'যেকোনো ভাষায় ৩ থেকে ৬০ সেকেন্ড কথা বলুন'
                   )}
                 </div>
               </div>
 
               {/* Recorded Audio Preview */}
               {inputAudioUrl && !isRecording && (
-                <div className="w-full max-w-md p-3 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-2xs">
+                <div className="w-full max-w-md p-3.5 rounded-2xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-2xs">
                   <div className="flex items-center space-x-2 text-xs font-mono-code text-[#0f172a] truncate">
                     <FileAudio className="w-4 h-4 text-[#bfa065] shrink-0" />
                     <span className="truncate">{inputAudioName}</span>
                   </div>
                   <button
                     type="button"
-                    onClick={() => handleToggleABSource('original')}
-                    className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bangla font-semibold text-[#0f172a] transition flex items-center space-x-1 cursor-pointer shrink-0"
+                    onClick={togglePlayInputPreview}
+                    className="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bangla font-semibold text-[#0f172a] transition flex items-center space-x-1 cursor-pointer shrink-0"
                   >
-                    <Play className="w-3 h-3 text-[#bfa065]" />
-                    <span>শুনুন</span>
+                    {isInputAudioPlaying ? (
+                      <>
+                        <Pause className="w-3 h-3 text-[#bfa065]" />
+                        <span>থামুন</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3 h-3 text-[#bfa065]" />
+                        <span>রেকর্ডিং শুনুন</span>
+                      </>
+                    )}
                   </button>
                 </div>
               )}
             </div>
           )}
 
-          {/* Mode 2: Audio File Upload */}
-          {inputMode === 'upload' && (
-            <div className="p-6 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-300 hover:border-[#bfa065] transition flex flex-col items-center justify-center text-center space-y-3 relative cursor-pointer">
-              <input
-                type="file"
-                accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.aac"
-                onChange={handleFileUpload}
-                className="absolute inset-0 opacity-0 cursor-pointer"
-              />
-              <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-[#bfa065] flex items-center justify-center">
-                <Upload className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="font-editorial text-sm font-bold text-[#0f172a] block">
-                  {inputAudioName ? inputAudioName : 'অডিও ফাইল টেনে এনে ফেলুন বা ব্রাউজ করুন'}
-                </span>
-                <span className="text-xs text-[#64748b] font-mono-code mt-0.5 block">
-                  MP3, WAV, M4A, WEBM, OGG (সর্বোচ্চ 15MB)
-                </span>
+          {/* TERTIARY OPTION: INSTANT SAMPLE AUDITION AUDIOS */}
+          {inputMode === 'sample' && (
+            <div className="space-y-3">
+              <span className="block text-xs font-bangla text-[#64748b] font-semibold">
+                ✨ নিচে থেকে যেকোনো একটি স্যাম্পল সিলেক্ট করে ট্রায়াল করুন:
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(Object.keys(SAMPLE_AUDIOS) as TargetLanguageKey[]).map((key) => {
+                  const s = SAMPLE_AUDIOS[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => loadAuditionSample(key)}
+                      className="p-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-[#bfa065] text-left transition cursor-pointer shadow-2xs group"
+                    >
+                      <div className="flex items-center justify-between text-xs mb-1.5">
+                        <span className="text-2xl">{s.flag}</span>
+                        <span className="font-mono-code text-[10px] text-[#64748b] bg-slate-100 px-1.5 py-0.5 rounded">
+                          {s.duration}
+                        </span>
+                      </div>
+                      <div className="font-editorial text-xs font-bold text-[#0f172a] group-hover:text-[#bfa065] transition-colors">
+                        {s.labelBn}
+                      </div>
+                      <div className="text-[10px] text-[#64748b] line-clamp-1 mt-1 font-bangla">
+                        {s.text}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
-
-          {/* 4 Instant Audition Samples */}
-          <div className="pt-2">
-            <span className="block text-xs font-bangla text-[#64748b] mb-2 font-semibold">
-              ✨ অথবা ১-ক্লিকে তাত্ক্ষণিক ট্রায়াল স্যাম্পল পরীক্ষা করুন:
-            </span>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {(Object.keys(SAMPLE_AUDIOS) as TargetLanguageKey[]).map((key) => {
-                const s = SAMPLE_AUDIOS[key];
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => loadAuditionSample(key)}
-                    className="p-3 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-[#bfa065] text-left transition cursor-pointer shadow-2xs group"
-                  >
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-base">{s.flag}</span>
-                      <span className="font-mono-code text-[10px] text-[#64748b] bg-slate-100 px-1.5 py-0.5 rounded">
-                        {s.duration}
-                      </span>
-                    </div>
-                    <div className="font-editorial text-xs font-bold text-[#0f172a] group-hover:text-[#bfa065] transition-colors">
-                      {s.labelBn}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
         </div>
 
-        {/* SECTION 2: Target Dubbing Language Selection (The 4 Requested Languages) */}
+        {/* SECTION 2: TARGET DUBBING LANGUAGE SELECTION (THE 4 CORE LANGUAGES) */}
         <div className="mt-8 pt-6 border-t border-slate-200 space-y-4">
           <div className="flex items-center justify-between">
             <label className="text-xs sm:text-sm font-bangla font-bold text-[#0f172a] flex items-center space-x-2">
@@ -945,7 +1220,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-2xl">{t.flag}</span>
                     {isSelected && (
-                      <span className="w-2 h-2 rounded-full bg-[#bfa065] shadow-[0_0_8px_rgba(191,160,101,0.8)]" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#bfa065] shadow-[0_0_8px_rgba(191,160,101,0.8)]" />
                     )}
                   </div>
                   <div className="font-editorial text-base font-bold text-[#0f172a]">
@@ -985,7 +1260,9 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
               <>
                 <Languages className="w-5 h-5 text-[#bfa065]" />
                 <span className="font-bangla font-bold">
-                  🎙️ ভয়েস শনাক্ত, মূল টেক্সট আলাদা ও ডাবিং শুরু করুন
+                  {inputMode === 'upload' && inputAudioName
+                    ? `📝 "${inputAudioName}" থেকে টেক্সট আলাদা করুন ও ডাবিং শুরু করুন`
+                    : '🎙️ ভয়েস শনাক্ত, মূল টেক্সট আলাদা ও ডাবিং শুরু করুন'}
                 </span>
                 <span className="boring-keycap text-[11px] ml-1">↵</span>
               </>
@@ -993,23 +1270,23 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
           </button>
         </div>
 
-        {/* RESULTS SECTION: Shown when text has been extracted */}
+        {/* RESULTS SECTION: Shown when text has been extracted from voice file */}
         {extractedTranscription && (
           <div className="mt-10 pt-8 border-t border-slate-200/90 space-y-7 animate-in fade-in zoom-in-95 duration-300">
-            {/* CARD 1: Auto Detected Source Language & Extracted Verbatim Text */}
-            <div className="p-6 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-4 shadow-inner">
+            {/* CARD 1: AUTO-EXTRACTED TEXT FROM UPLOADED VOICE FILE */}
+            <div className="p-6 rounded-3xl bg-slate-50/90 border border-slate-200 space-y-4 shadow-inner">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-3">
                 <div className="flex items-center space-x-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="font-editorial text-sm font-bold text-[#0f172a]">
-                    স্বয়ংক্রিয়ভাবে শনাক্তকৃত ভাষা ও আলাদা করা মূল টেক্সট
+                  <span className="font-editorial text-base font-bold text-[#0f172a]">
+                    📁 ভয়েস ফাইল থেকে রূপান্তরিত মূল টেক্সট
                   </span>
                 </div>
 
                 <div className="flex items-center space-x-2">
-                  {/* Language Badge */}
+                  {/* Source Language Badge */}
                   <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono-code font-bold">
-                    🌐 {detectedLanguage}
+                    🌐 শনাক্তকৃত ভাষা: {detectedLanguage}
                   </span>
                   <span className="text-xs font-mono-code text-[#64748b]">
                     {extractedTranscription.length} অক্ষর
@@ -1017,60 +1294,120 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                 </div>
               </div>
 
-              {/* Extracted Speech Text Display */}
-              <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-2xs relative">
-                <p className="font-bangla text-base sm:text-lg text-[#0f172a] leading-relaxed select-text">
-                  "{extractedTranscription}"
-                </p>
+              {/* Extracted Speech Text Display / Editing Area */}
+              <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-2xs relative">
+                {isEditingText ? (
+                  <div className="space-y-3">
+                    <label className="text-xs font-bangla font-semibold text-[#64748b] block">
+                      টেক্সট এডিট করুন (প্রয়োজনে শব্দ পরিবর্তন করে পুনরায় ডাবিং করুন):
+                    </label>
+                    <textarea
+                      value={editableText}
+                      onChange={(e) => setEditableText(e.target.value)}
+                      rows={3}
+                      className="w-full p-3 rounded-xl border border-slate-300 focus:border-[#bfa065] focus:ring-1 focus:ring-[#bfa065] text-base font-bangla text-[#0f172a] resize-y outline-hidden"
+                    />
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={handleReDubWithEditedText}
+                        disabled={isReDubbing || !editableText.trim()}
+                        className="px-4 py-2 rounded-xl bg-[#0f172a] hover:bg-slate-800 text-white text-xs font-bangla font-bold flex items-center space-x-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                      >
+                        {isReDubbing ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                            <span>ডাবিং হচ্ছে...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5 text-[#bfa065]" />
+                            <span>এডিটেড টেক্সটে পুনরায় ডাবিং করুন</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditableText(extractedTranscription);
+                          setIsEditingText(false);
+                        }}
+                        className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bangla text-[#64748b] cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="font-bangla text-base sm:text-lg text-[#0f172a] leading-relaxed select-text font-medium">
+                      "{extractedTranscription}"
+                    </p>
 
-                <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-[#64748b]">
-                  <span className="font-bangla">অডিও থেকে গৃহীত নির্ভুল মূল কথন</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(extractedTranscription);
-                      setCopiedOriginal(true);
-                      setTimeout(() => setCopiedOriginal(false), 2000);
-                    }}
-                    className="flex items-center space-x-1 text-[#bfa065] hover:text-[#0f172a] transition cursor-pointer font-mono-code"
-                  >
-                    {copiedOriginal ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedOriginal ? 'কপি হয়েছে' : 'কপি টেক্সট'}</span>
-                  </button>
-                </div>
+                    <div className="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-[#64748b]">
+                      <span className="font-bangla flex items-center space-x-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>ভয়েস ফাইল থেকে নির্ভুলভাবে রূপান্তরিত কথন</span>
+                      </span>
+
+                      <div className="flex items-center space-x-3">
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingText(true)}
+                          className="flex items-center space-x-1 text-[#64748b] hover:text-[#0f172a] transition cursor-pointer font-bangla"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>এডিট করুন</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(extractedTranscription);
+                            setCopiedOriginal(true);
+                            setTimeout(() => setCopiedOriginal(false), 2000);
+                          }}
+                          className="flex items-center space-x-1 text-[#bfa065] hover:text-[#0f172a] transition cursor-pointer font-mono-code font-bold"
+                        >
+                          {copiedOriginal ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedOriginal ? 'কপি হয়েছে' : 'কপি টেক্সট'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Acoustic Forensics Profile */}
               {vocalProfile && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-                  <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                    <span className="text-[10px] text-[#64748b] block">পিচ (Pitch):</span>
+                  <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                    <span className="text-[10px] text-[#64748b] block font-mono-code">পিচ (Pitch):</span>
                     <span className="font-bold text-[#0f172a]">{vocalProfile.pitch || 'Baritone'}</span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                    <span className="text-[10px] text-[#64748b] block">টোন (Tone):</span>
+                  <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                    <span className="text-[10px] text-[#64748b] block font-mono-code">টোন (Tone):</span>
                     <span className="font-bold text-[#0f172a]">{vocalProfile.tone || 'Warm'}</span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                    <span className="text-[10px] text-[#64748b] block">গতি (Pace):</span>
+                  <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                    <span className="text-[10px] text-[#64748b] block font-mono-code">গতি (Pace):</span>
                     <span className="font-bold text-[#0f172a]">{vocalProfile.pace || 'Measured'}</span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-white border border-slate-200">
-                    <span className="text-[10px] text-[#64748b] block">শ্বাস-প্রশ্বাস:</span>
+                  <div className="p-2.5 rounded-xl bg-white border border-slate-200">
+                    <span className="text-[10px] text-[#64748b] block font-mono-code">শ্বাস-প্রশ্বাস:</span>
                     <span className="font-bold text-[#0f172a] truncate">স্বাভাবিক পজ</span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* CARD 2: Multilingual Dubbed Voice & Translated Script */}
-            <div className="p-6 rounded-2xl bg-gradient-to-b from-white to-amber-50/20 border border-[#bfa065]/40 shadow-lg space-y-5">
+            {/* CARD 2: MULTILINGUAL DUBBED AUDIO IN 4 LANGUAGES */}
+            <div className="p-6 sm:p-7 rounded-3xl bg-gradient-to-b from-white to-amber-50/20 border border-[#bfa065]/40 shadow-lg space-y-5">
               {/* Header with Dubbed Language Tabs */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
                 <div className="flex items-center space-x-2">
                   <Volume2 className="w-5 h-5 text-[#bfa065]" />
                   <span className="font-editorial text-base sm:text-lg font-bold text-[#0f172a]">
-                    ডাবিং করা অডিও ও অনুবাদিত কথন:
+                    ৪টি ভাষায় ডাবিং করা কণ্ঠ ও অনুবাদিত স্ক্রিপ্ট:
                   </span>
                 </div>
 
@@ -1083,7 +1420,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                         key={t.key}
                         type="button"
                         onClick={() => handleSwitchDubbedLang(t.key)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-bangla font-semibold transition flex items-center space-x-1 cursor-pointer shrink-0 ${
+                        className={`px-3 py-1 rounded-lg text-xs font-bangla font-semibold transition flex items-center space-x-1.5 cursor-pointer shrink-0 ${
                           isSelected
                             ? 'bg-white text-[#0f172a] shadow-xs'
                             : 'text-[#64748b] hover:text-[#0f172a]'
@@ -1098,7 +1435,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
               </div>
 
               {/* Translated Text Script */}
-              <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-2xs">
+              <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-2xs">
                 <div className="flex items-center justify-between text-xs text-[#bfa065] font-mono-code mb-2">
                   <span className="font-bold uppercase tracking-wider">
                     {selectedTargetLang} Dubbed Script
@@ -1124,32 +1461,32 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
               </div>
 
               {/* High-Fidelity Audio Waveform Player with A/B Toggle */}
-              <div className="p-5 rounded-2xl bg-slate-900 text-white space-y-4 shadow-xl">
+              <div className="p-6 rounded-2xl bg-slate-900 text-white space-y-4 shadow-xl">
                 {/* A/B Comparison Switcher */}
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800 text-xs">
-                  <span className="font-bangla text-slate-400">অডিও প্লেব্যাক সোর্স:</span>
+                <div className="flex flex-wrap items-center justify-between pb-3 border-b border-slate-800 text-xs gap-2">
+                  <span className="font-bangla text-slate-400">অডিও প্লেব্যাক সোর্স নির্বাচন:</span>
                   <div className="flex items-center space-x-1 p-1 rounded-lg bg-slate-800">
                     <button
                       type="button"
                       onClick={() => handleToggleABSource('original')}
-                      className={`px-2.5 py-0.5 rounded text-xs font-bangla transition cursor-pointer ${
+                      className={`px-3 py-1 rounded text-xs font-bangla transition cursor-pointer ${
                         activeAudioSource === 'original'
                           ? 'bg-[#bfa065] text-slate-900 font-bold'
                           : 'text-slate-400 hover:text-white'
                       }`}
                     >
-                      মূল ইনপুট ভয়েস
+                      📁 মূল আপলোডকৃত ভয়েস
                     </button>
                     <button
                       type="button"
                       onClick={() => handleToggleABSource('dubbed')}
-                      className={`px-2.5 py-0.5 rounded text-xs font-bangla transition cursor-pointer ${
+                      className={`px-3 py-1 rounded text-xs font-bangla transition cursor-pointer ${
                         activeAudioSource === 'dubbed'
                           ? 'bg-[#bfa065] text-slate-900 font-bold'
                           : 'text-slate-400 hover:text-white'
                       }`}
                     >
-                      ডাবিং করা ভয়েস
+                      ✨ ডাবিং করা নতুন কণ্ঠ
                     </button>
                   </div>
                 </div>
@@ -1160,20 +1497,24 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                   <button
                     type="button"
                     onClick={togglePlayAudio}
-                    className="w-12 h-12 rounded-full bg-[#bfa065] hover:bg-[#d4b476] text-slate-950 flex items-center justify-center transition cursor-pointer shrink-0 shadow-lg"
+                    className="w-13 h-13 rounded-full bg-[#bfa065] hover:bg-[#d4b476] text-slate-950 flex items-center justify-center transition cursor-pointer shrink-0 shadow-lg"
                   >
-                    {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                    {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
                   </button>
 
                   {/* Waveform / Equalizer Bars */}
-                  <div className="flex-1 flex items-center space-x-1 h-9">
+                  <div className="flex-1 flex items-center space-x-1 h-10">
                     {[18, 42, 28, 65, 84, 52, 92, 44, 76, 32, 60, 88, 36, 70, 95, 48, 80, 25, 68, 54].map(
                       (h, idx) => {
                         const active = isPlaying;
                         return (
                           <div
                             key={idx}
-                            style={{ height: active ? `${Math.max(15, (h * (idx % 3 + 1)) % 100)}%` : `${h * 0.4}%` }}
+                            style={{
+                              height: active
+                                ? `${Math.max(15, (h * ((idx % 3) + 1)) % 100)}%`
+                                : `${h * 0.4}%`,
+                            }}
                             className={`flex-1 rounded-full transition-all duration-150 ${
                               active ? 'bg-[#bfa065]' : 'bg-slate-700'
                             }`}
@@ -1190,7 +1531,7 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                         key={rate}
                         type="button"
                         onClick={() => setAudioPlaybackRate(rate)}
-                        className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
+                        className={`px-2 py-0.5 rounded transition cursor-pointer ${
                           audioPlaybackRate === rate
                             ? 'bg-[#bfa065] text-slate-900 font-bold'
                             : 'hover:text-white'
@@ -1203,11 +1544,13 @@ export const VoiceDubbing: React.FC<VoiceDubbingProps> = ({ lang }) => {
                 </div>
 
                 {/* Bottom Actions: Download WAV & Quota */}
-                <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-800 text-xs">
-                  <div className="text-slate-400 font-mono-code">
-                    {activeAudioSource === 'dubbed'
-                      ? `ডাবিং অডিও: ${selectedTargetLang} (24kHz WAV)`
-                      : 'মূল ইনপুট অডিও'}
+                <div className="flex flex-wrap items-center justify-between pt-3 border-t border-slate-800 text-xs gap-2">
+                  <div className="text-slate-400 font-mono-code flex items-center space-x-2">
+                    <span>
+                      {activeAudioSource === 'dubbed'
+                        ? `ডাবিং অডিও: ${selectedTargetLang} (24kHz WAV)`
+                        : `মূল ইনপুট ফাইল: ${inputAudioName || 'Audio'}`}
+                    </span>
                   </div>
 
                   <button

@@ -99,8 +99,6 @@ export const StudioVoiceover: React.FC<StudioVoiceoverProps> = ({
     return `${Math.max(1, seconds)} seconds`;
   };
 
-
-
   const handleSelectPreset = (preset: ScriptPreset) => {
     setSelectedPresetId(preset.id);
     setScriptText(preset.text);

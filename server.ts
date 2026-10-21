@@ -217,6 +217,7 @@ app.post('/api/dub-voice', async (req, res) => {
     const {
       audioBase64,
       mimeType = 'audio/wav',
+      fileName,
       targetLanguage = 'Bangla',
       vocalModePrompt,
       targetVoice,
@@ -228,7 +229,25 @@ app.post('/api/dub-voice', async (req, res) => {
     }
 
     const cleanAudio = audioBase64.replace(/^data:[^;]+;base64,/, '');
-    const cleanMimeType = (mimeType || 'audio/wav').split(';')[0].trim().toLowerCase() || 'audio/wav';
+    let cleanMimeType = (mimeType || 'audio/wav').split(';')[0].trim().toLowerCase();
+    
+    // Auto-detect and normalize audio mime types from file extension if available
+    if (fileName && typeof fileName === 'string') {
+      const ext = fileName.split('.').pop()?.toLowerCase();
+      if (ext === 'mp3') cleanMimeType = 'audio/mp3';
+      else if (ext === 'wav') cleanMimeType = 'audio/wav';
+      else if (ext === 'm4a') cleanMimeType = 'audio/mp4';
+      else if (ext === 'ogg') cleanMimeType = 'audio/ogg';
+      else if (ext === 'webm') cleanMimeType = 'audio/webm';
+      else if (ext === 'aac') cleanMimeType = 'audio/aac';
+      else if (ext === 'flac') cleanMimeType = 'audio/flac';
+    }
+    if (cleanMimeType === 'audio/mpeg') {
+      cleanMimeType = 'audio/mp3';
+    }
+    if (!cleanMimeType || cleanMimeType === 'application/octet-stream') {
+      cleanMimeType = 'audio/wav';
+    }
 
     // Normalize target language into one of: 'Bangla', 'English', 'Hindi', 'Arabic'
     let normTarget = 'Bangla';
